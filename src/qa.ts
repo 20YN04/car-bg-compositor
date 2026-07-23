@@ -111,13 +111,17 @@ export function runQA(input: QAInput, cfg: Config): QAWarning[] {
     });
   }
 
-  if (analysis.shadowBandHeight > 0) {
-    warnings.push({
-      code: "SHADOW_IN_MASK",
-      message:
-        `onderste ${analysis.shadowBandHeight} rijen genegeerd bij de grondlijn — ` +
-        "uitwaaierende slagschaduw in het masker",
-    });
+  if (analysis.shadowBandHeight > 0 || analysis.groundTrim > 2) {
+    const parts: string[] = [];
+    if (analysis.shadowBandHeight > 0) {
+      parts.push(`${analysis.shadowBandHeight} rijen uitwaaierende schaduw genegeerd`);
+    }
+    if (analysis.groundTrim > 2) {
+      parts.push(
+        `${analysis.groundTrim}px masker onder de wiellijn weggesneden (aangesmolten contactschaduw)`,
+      );
+    }
+    warnings.push({ code: "SHADOW_IN_MASK", message: parts.join("; ") });
   }
 
   const bumpSuspect =

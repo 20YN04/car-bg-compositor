@@ -10,6 +10,7 @@ import {
   erodeAlpha,
   rejectShadowBand,
   restrictAlphaToBox,
+  trimAlphaBelow,
 } from "./bbox.js";
 
 const OPTS = { threshold: 10, groundPercentile: 0.95, minBlobArea: 0.005 };
@@ -271,6 +272,43 @@ describe("detectTopBump", () => {
     fillRect(alpha, 400, 120, 80, 300, 150); // cabine: 45% van de breedte hoger
     const bump = detectTopBump(alpha, 400, 300, computeBBox(alpha, 400, 300, 10).bbox!, 10);
     expect(bump).toBeNull(); // breder dan 30% van de bbox → geen "bult"
+  });
+});
+
+describe("wielcontact-grondlijn (regressie: slagschaduw onder wiel)", () => {
+  it("legt de grondlijn op de wiellijn, niet op een brede schaduwblob onder één wiel", () => {
+    const alpha = makeAlpha(400, 300);
+    fillRect(alpha, 400, 100, 50, 299, 200); // romp
+    fillRect(alpha, 400, 130, 201, 170, 240); // wiel links, contact op 240
+    fillRect(alpha, 400, 230, 201, 270, 240); // wiel rechts
+    // brede, rónde schaduwblob onder het linkerwiel tot 28px lager: breed
+    // genoeg (>5% van de kolommen) om de percentielmethode te misleiden
+    for (let i = 0; i < 24; i++) {
+      const x = 133 + i;
+      const depth = Math.max(1, Math.round(28 * Math.sin((Math.PI * (i + 1)) / 26)));
+      fillRect(alpha, 400, x, 241, x, 240 + depth);
+    }
+    const result = analyzeAlpha(alpha, 400, 300, OPTS);
+    // de percentiel-grondlijn zou in de schaduwblob (~250-268) uitkomen
+    expect(result.groundLine).toBe(240);
+    expect(result.groundTrim).toBeGreaterThan(20);
+    expect(result.groundFallback).toBe(false);
+    expect(result.contactClusters.length).toBeGreaterThanOrEqual(1);
+    // en trimmen onder de wiellijn verwijdert precies de schaduwblob
+    const removed = trimAlphaBelow(alpha, 400, 300, result.groundLine! + 2);
+    expect(removed).toBeGreaterThan(100);
+    expect(computeBBox(alpha, 400, 300, 10).bbox!.bottom).toBeLessThanOrEqual(242);
+  });
+
+  it("een vlak wielcontact zonder schaduw blijft ongewijzigd", () => {
+    const alpha = makeAlpha(400, 300);
+    fillRect(alpha, 400, 100, 50, 299, 200);
+    fillRect(alpha, 400, 130, 201, 170, 240);
+    fillRect(alpha, 400, 230, 201, 270, 240);
+    const result = analyzeAlpha(alpha, 400, 300, OPTS);
+    expect(result.groundLine).toBe(240);
+    expect(result.groundTrim).toBe(0);
+    expect(result.contactClusters).toHaveLength(2);
   });
 });
 

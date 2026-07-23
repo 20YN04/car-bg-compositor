@@ -179,9 +179,9 @@ export const defaultConfig: Config = {
     enabled: true,
     detectPrompt: "car window",
     segmentModelId: "fal-ai/sam2/image",
-    tintOpacity: 0.8,
-    tintColor: { r: 20, g: 24, b: 28 },
-    featherSigma: 3,
+    tintOpacity: 0.45,
+    tintColor: { r: 35, g: 40, b: 48 },
+    featherSigma: 5,
   },
   /**
    * SCHATTING — de prijs per BiRefNet-call staat niet in de publieke docs.

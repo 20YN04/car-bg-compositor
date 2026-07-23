@@ -14,6 +14,9 @@ function baseAnalysis(): AlphaAnalysis {
     area: 240_000, // 24% van 1000×1000
     blobCount: 1,
     shadowBandHeight: 0,
+    groundTrim: 0,
+    contactClusters: [],
+    groundFallback: false,
     topBump: null,
   };
 }
@@ -97,6 +100,12 @@ describe("runQA", () => {
   it("SHADOW_IN_MASK wanneer de shadow-band reject aansloeg", () => {
     const input = baseInput();
     input.analysis.shadowBandHeight = 40;
+    expect(codes(input)).toContain("SHADOW_IN_MASK");
+  });
+
+  it("SHADOW_IN_MASK wanneer er masker onder de wiellijn is weggesneden", () => {
+    const input = baseInput();
+    input.analysis.groundTrim = 15;
     expect(codes(input)).toContain("SHADOW_IN_MASK");
   });
 

@@ -7,9 +7,9 @@ import sharp from "sharp";
 import {
   analyzeAlpha,
   cleanAlpha,
-  computeContactClusters,
   erodeAlpha,
   restrictAlphaToBox,
+  trimAlphaBelow,
   type AlphaAnalysis,
 } from "./bbox.js";
 import {
@@ -248,6 +248,17 @@ async function processImage(
     minBlobArea: cfg.QA.minBlobArea,
   });
 
+  // aangesmolten slagschaduw onder de wiellijn uit het masker snijden, zodat
+  // die niet als grijze appendage onder de auto in het eindbeeld belandt
+  let groundTrimmedPx = 0;
+  if (analysis.bbox && analysis.groundLine !== null && analysis.groundTrim > 0) {
+    const slack = Math.max(2, Math.round(height * 0.002));
+    groundTrimmedPx = trimAlphaBelow(alpha, width, height, analysis.groundLine + slack);
+    if (groundTrimmedPx > 0) {
+      for (let i = 0; i < alpha.length; i++) data[i * 4 + 3] = alpha[i] ?? 0;
+    }
+  }
+
   let placement: Placement | null = null;
   if (analysis.bbox && analysis.groundLine !== null) {
     placement = computePlacement(
@@ -330,19 +341,14 @@ async function processImage(
   );
 
   let outJpeg: Buffer | null = null;
-  let contactClusterCount = 0;
   let plateStatus: PlateStatus = plateEnabled ? "none" : "off";
   if (analysis.bbox && placement) {
-    const clusters = computeContactClusters(
-      alpha, width, height, analysis.bbox,
-      analysis.bbox.bottom - analysis.shadowBandHeight,
-      cfg.ALPHA_THRESHOLD,
-    );
-    contactClusterCount = clusters.length;
     const composited = await compositeImage(
       {
         rgba: data, width, height, bbox: analysis.bbox, placement, backgroundPath,
-        contactShadows: buildContactShadows(clusters, analysis.bbox, placement, cfg),
+        contactShadows: buildContactShadows(
+          analysis.contactClusters, analysis.bbox, placement, cfg,
+        ),
       },
       cfg,
     );
@@ -385,7 +391,10 @@ async function processImage(
         outsideBoxRemoved,
         plates: plates.length,
         plateStatus,
-        contactClusters: contactClusterCount,
+        contactClusters: analysis.contactClusters.length,
+        groundTrim: analysis.groundTrim,
+        groundTrimmedPx,
+        groundFallback: analysis.groundFallback,
         windows: windowInfo,
       },
     );

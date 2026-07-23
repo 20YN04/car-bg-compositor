@@ -11,6 +11,9 @@ export interface AlphaAnalysis {
   area: number; // aantal pixels boven de threshold
   blobCount: number; // losse componenten boven minBlobArea
   shadowBandHeight: number; // onderste rijen genegeerd als uitwaaierende slagschaduw
+  groundTrim: number; // maskerrijen ónder de wiellijn (aangesmolten contactschaduw)
+  contactClusters: ContactCluster[]; // wielcontact-plateaus, y = robuust contactniveau
+  groundFallback: boolean; // true: geen wielplateau gevonden, percentiel-grondlijn gebruikt
   topBump: { width: number; height: number } | null; // lokale bult boven de daklijn
 }
 
@@ -387,6 +390,121 @@ export function computeContactClusters(
   return clusters;
 }
 
+export interface WheelGroundResult {
+  groundLine: number;
+  clusters: ContactCluster[]; // kandidaat-wielclusters met y = mediaan-niveau
+  fallback: boolean;
+}
+
+function percentileOf(sorted: number[], p: number): number {
+  return sorted[Math.min(sorted.length - 1, Math.floor(p * (sorted.length - 1)))] ?? 0;
+}
+
+/**
+ * Grondlijn op het echte wielcontact. Wielen vormen brede, vlákke plateaus op
+ * de onderste contour; een aangesmolten slagschaduw is een rónde bult. Per
+ * cluster is het contactniveau daarom de mediaan van de kolom-onderkanten
+ * (robuust tegen de bult), en alleen brede clusters met beperkte spreiding
+ * tellen als wiel. De grondlijn is het diepste wielniveau; zonder plateau
+ * valt de bepaling terug op de percentiel-grondlijn.
+ */
+export function computeWheelGroundLine(
+  alpha: Uint8Array,
+  width: number,
+  height: number,
+  bbox: BBox,
+  threshold: number,
+  percentileGroundLine: number,
+  adjustedBottom: number,
+): WheelGroundResult {
+  const bboxHeight = bbox.bottom - bbox.top + 1;
+  const bboxWidth = bbox.right - bbox.left + 1;
+  // ruime contactband zodat óók wielen boven een diepere schaduwblob meedoen
+  const bandDepth = Math.max(6, Math.round(bboxHeight * 0.15));
+  const contactMinY = percentileGroundLine - bandDepth;
+  const maxGap = Math.max(2, Math.round(bboxWidth * 0.02));
+  const minClusterWidth = Math.max(3, Math.round(bboxWidth * 0.025));
+  const maxSpread = Math.max(6, Math.round(bboxHeight * 0.03));
+
+  const scanBottom = Math.min(bbox.bottom, adjustedBottom);
+  const bottoms: number[] = [];
+  for (let x = bbox.left; x <= bbox.right; x++) {
+    let bottomY = -1;
+    for (let y = scanBottom; y >= bbox.top; y--) {
+      if ((alpha[y * width + x] ?? 0) > threshold) {
+        bottomY = y;
+        break;
+      }
+    }
+    bottoms.push(bottomY);
+  }
+
+  const clusters: ContactCluster[] = [];
+  let start = -1;
+  let gap = 0;
+  let lastContact = -1;
+  const flush = (endIdx: number): void => {
+    if (start < 0) return;
+    if (endIdx - start + 1 >= minClusterWidth) {
+      const values = [];
+      for (let i = start; i <= endIdx; i++) {
+        if (bottoms[i]! >= contactMinY) values.push(bottoms[i]!);
+      }
+      values.sort((a, b) => a - b);
+      const spread = percentileOf(values, 0.9) - percentileOf(values, 0.1);
+      if (spread <= maxSpread) {
+        clusters.push({
+          x0: bbox.left + start,
+          x1: bbox.left + endIdx,
+          y: percentileOf(values, 0.5),
+        });
+      }
+    }
+    start = -1;
+    gap = 0;
+  };
+  for (let i = 0; i < bottoms.length; i++) {
+    if (bottoms[i]! >= contactMinY && bottoms[i]! >= 0) {
+      if (start < 0) start = i;
+      lastContact = i;
+      gap = 0;
+    } else if (start >= 0 && ++gap > maxGap) {
+      flush(lastContact);
+    }
+  }
+  flush(lastContact);
+
+  if (clusters.length === 0) {
+    return { groundLine: percentileGroundLine, clusters: [], fallback: true };
+  }
+  const groundLine = Math.max(...clusters.map((c) => c.y));
+  return { groundLine, clusters, fallback: false };
+}
+
+/**
+ * Zet alle maskerpixels onder de wiellijn (+ kleine marge) op 0, zodat een
+ * aangesmolten slagschaduw niet als grijze appendage onder de auto in het
+ * eindbeeld belandt. Retourneert het aantal verwijderde pixels.
+ */
+export function trimAlphaBelow(
+  alpha: Uint8Array,
+  width: number,
+  height: number,
+  cutY: number,
+): number {
+  let removed = 0;
+  for (let y = Math.max(0, cutY + 1); y < height; y++) {
+    const row = y * width;
+    for (let x = 0; x < width; x++) {
+      if ((alpha[row + x] ?? 0) > 0) {
+        alpha[row + x] = 0;
+        removed++;
+      }
+    }
+  }
+  return removed;
+}
+
 export function analyzeAlpha(
   alpha: Uint8Array,
   width: number,
@@ -401,18 +519,30 @@ export function analyzeAlpha(
       area: 0,
       blobCount: 0,
       shadowBandHeight: 0,
+      groundTrim: 0,
+      contactClusters: [],
+      groundFallback: false,
       topBump: null,
     };
   }
 
   const shadowBand = rejectShadowBand(alpha, width, height, bbox, opts.threshold);
-  const groundLine = computeGroundLine(
+  const percentileGL = computeGroundLine(
     alpha,
     width,
     height,
     bbox,
     opts.threshold,
     opts.groundPercentile,
+    shadowBand.adjustedBottom,
+  );
+  const wheel = computeWheelGroundLine(
+    alpha,
+    width,
+    height,
+    bbox,
+    opts.threshold,
+    percentileGL,
     shadowBand.adjustedBottom,
   );
   const blobCount = countBlobs(
@@ -425,10 +555,13 @@ export function analyzeAlpha(
   const topBump = detectTopBump(alpha, width, height, bbox, opts.threshold);
   return {
     bbox,
-    groundLine,
+    groundLine: wheel.groundLine,
     area,
     blobCount,
     shadowBandHeight: shadowBand.bandHeight,
+    groundTrim: Math.max(0, shadowBand.adjustedBottom - wheel.groundLine),
+    contactClusters: wheel.clusters,
+    groundFallback: wheel.fallback,
     topBump,
   };
 }
