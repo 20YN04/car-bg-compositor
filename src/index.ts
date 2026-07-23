@@ -552,7 +552,8 @@ function printSummary(results: ImageResult[], cfg: Config): void {
     cfg.COST_PER_CALL_USD +
     (cfg.DETECT.enabled ? cfg.AI.costPerDetection : 0) +
     (cfg.AI.enabled ? cfg.AI.costPerDetection + 2 * cfg.AI.costPerQuery : 0) +
-    (cfg.WINDOWS.enabled ? cfg.AI.costPerDetection + cfg.AI.costPerSegment : 0);
+    (cfg.WINDOWS.enabled ? cfg.AI.costPerDetection + cfg.AI.costPerSegment : 0) +
+    (cfg.MATTE.enabled ? cfg.AI.costPerSegment : 0);
   const monthly = cfg.MONTHLY_VOLUME * perImage;
   console.log(
     `\nkosten: $${runCost.toFixed(4)} deze run ` +
