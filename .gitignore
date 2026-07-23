@@ -1,0 +1,14 @@
+node_modules/
+.env
+in/*
+out/*
+debug/*
+cache/*
+backgrounds/*
+!in/.gitkeep
+!out/.gitkeep
+!debug/.gitkeep
+!cache/.gitkeep
+!backgrounds/.gitkeep
+dist/
+*.log
