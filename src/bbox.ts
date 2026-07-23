@@ -464,12 +464,18 @@ export function computeWheelGroundLine(
   }
 
   // stap 2 — aangrenzende plateaus op vergelijkbare diepte mergen (band +
-  // schaduwkom horen bij hetzelfde wiel), zodat de kom niet als eigen
-  // "contact" kan winnen. De dieptevoorwaarde voorkomt dat de onderbodem
-  // (veel hoger) aan de wielen vastkettingt.
+  // schaduwkom/bumperstrook horen bij hetzelfde wiel). De dieptevoorwaarde
+  // voorkomt dat de onderbodem (veel hoger) aan de wielen vastkettingt.
   const maxGap = Math.max(3, Math.round(bboxWidth * 0.02));
-  const merged: { i0: number; i1: number; median: number }[] = [];
+  const merged: {
+    i0: number;
+    i1: number;
+    median: number;
+    bestWidth: number;
+    bestMedian: number;
+  }[] = [];
   for (const iv of intervals) {
+    const ivWidth = iv.i1 - iv.i0 + 1;
     const last = merged[merged.length - 1];
     if (
       last &&
@@ -478,26 +484,32 @@ export function computeWheelGroundLine(
     ) {
       last.i1 = iv.i1;
       last.median = Math.max(last.median, iv.median);
+      if (ivWidth > last.bestWidth) {
+        last.bestWidth = ivWidth;
+        last.bestMedian = iv.median;
+      }
     } else {
-      merged.push({ ...iv });
+      merged.push({ ...iv, bestWidth: ivWidth, bestMedian: iv.median });
     }
   }
 
   // stap 3 — contactlijn per cluster: de band vult boven de contactlijn
-  // (bijna) de volle clusterbreedte, de schaduwkom eronder versmalt. Neem de
-  // diepste rij die nog ≥80% van de clusterkolommen vult.
+  // (bijna) de volle clusterbreedte, de schaduwkom/bumperstrook eronder
+  // versmalt. Neem de diepste rij die nog ≥80% van de clusterkolommen vult;
+  // de aanroeper trimt met een marge zodat hooguit enkele échte bandpixels
+  // sneuvelen (die in de contactschaduw vallen) in ruil voor stevige aarding.
   const plateaus: ContactCluster[] = [];
-  for (const { i0, i1 } of merged) {
-    const cols = i1 - i0 + 1;
+  for (const m of merged) {
+    const cols = m.i1 - m.i0 + 1;
     let deepest = -1;
-    for (let c = i0; c <= i1; c++) {
+    for (let c = m.i0; c <= m.i1; c++) {
       if (bottoms[c]! > deepest) deepest = bottoms[c]!;
     }
     let contact = deepest;
     for (let y = deepest; y >= bbox.top; y--) {
       let filled = 0;
       const row = y * width;
-      for (let c = i0; c <= i1; c++) {
+      for (let c = m.i0; c <= m.i1; c++) {
         if ((alpha[row + bbox.left + c] ?? 0) > threshold) filled++;
       }
       if (filled >= 0.8 * cols) {
@@ -505,7 +517,7 @@ export function computeWheelGroundLine(
         break;
       }
     }
-    plateaus.push({ x0: bbox.left + i0, x1: bbox.left + i1, y: contact });
+    plateaus.push({ x0: bbox.left + m.i0, x1: bbox.left + m.i1, y: contact });
   }
 
   if (plateaus.length === 0) {

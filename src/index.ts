@@ -326,7 +326,9 @@ async function processImage(
   // die niet als grijze appendage onder de auto in het eindbeeld belandt
   let groundTrimmedPx = 0;
   if (analysis.bbox && analysis.groundLine !== null && analysis.groundTrim > 0) {
-    const slack = Math.max(2, Math.round(height * 0.002));
+    // ruime marge: liever een paar schaduwpixels laten staan (vallen in de
+    // contactschaduw) dan echte bandpixels wegsnijden
+    const slack = Math.max(4, Math.round(height * 0.004));
     groundTrimmedPx = trimAlphaBelow(alpha, width, height, analysis.groundLine + slack);
     if (groundTrimmedPx > 0) {
       for (let i = 0; i < alpha.length; i++) data[i * 4 + 3] = alpha[i] ?? 0;

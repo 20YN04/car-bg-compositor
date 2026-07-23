@@ -306,10 +306,11 @@ describe("wielcontact-grondlijn (regressie: slagschaduw onder wiel)", () => {
     fillRect(alpha, 400, 100, 50, 299, 200); // romp
     fillRect(alpha, 400, 130, 201, 170, 240); // wiel: vlakke bandlijn op 240
     fillRect(alpha, 400, 230, 201, 270, 240);
-    // aangesmolten schaduwkom onder het linkerwiel: rond, tot 14px dieper
-    for (let i = 0; i < 25; i++) {
-      const x = 138 + i;
-      const depth = Math.max(1, Math.round(14 * Math.sin((Math.PI * (i + 1)) / 27)));
+    // aangesmolten schaduwkom onder het midden van het linkerwiel: smal
+    // (12 kolommen) en rond, tot 14px dieper dan de bandlijn
+    for (let i = 0; i < 12; i++) {
+      const x = 145 + i;
+      const depth = Math.max(1, Math.round(14 * Math.sin((Math.PI * (i + 1)) / 13)));
       fillRect(alpha, 400, x, 241, x, 240 + depth);
     }
     const result = analyzeAlpha(alpha, 400, 300, OPTS);
