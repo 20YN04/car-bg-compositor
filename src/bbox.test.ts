@@ -301,6 +301,23 @@ describe("wielcontact-grondlijn (regressie: slagschaduw onder wiel)", () => {
     expect(computeBBox(alpha, 400, 300, 10).bbox!.bottom).toBeLessThanOrEqual(242);
   });
 
+  it("legt de grondlijn op de bandlijn, niet op een schaduwkom onder de band", () => {
+    const alpha = makeAlpha(400, 300);
+    fillRect(alpha, 400, 100, 50, 299, 200); // romp
+    fillRect(alpha, 400, 130, 201, 170, 240); // wiel: vlakke bandlijn op 240
+    fillRect(alpha, 400, 230, 201, 270, 240);
+    // aangesmolten schaduwkom onder het linkerwiel: rond, tot 14px dieper
+    for (let i = 0; i < 25; i++) {
+      const x = 138 + i;
+      const depth = Math.max(1, Math.round(14 * Math.sin((Math.PI * (i + 1)) / 27)));
+      fillRect(alpha, 400, x, 241, x, 240 + depth);
+    }
+    const result = analyzeAlpha(alpha, 400, 300, OPTS);
+    expect(result.bbox!.bottom).toBe(254); // de kom zit in de bbox…
+    expect(result.groundLine).toBe(240); // …maar de grondlijn ligt op de bandlijn
+    expect(result.groundTrim).toBe(14);
+  });
+
   it("een vlak wielcontact zonder schaduw blijft ongewijzigd", () => {
     const alpha = makeAlpha(400, 300);
     fillRect(alpha, 400, 100, 50, 299, 200);

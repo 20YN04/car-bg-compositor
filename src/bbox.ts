@@ -435,10 +435,10 @@ export function computeWheelGroundLine(
     bottoms.push(bottomY);
   }
 
-  // plateaus: maximale runs waarvan de onderkant vlak blijft (±tolerance).
-  // Wielcontact is vlak en breed; een ronde schaduwblob haalt de vereiste
-  // vlakke breedte niet.
-  const plateaus: ContactCluster[] = [];
+  // stap 1 — plateaus: maximale runs waarvan de onderkant vlak blijft
+  // (±tolerance). Wielcontact is vlak en breed; een ronde schaduwblob haalt
+  // de vereiste vlakke breedte niet — maar kan wél sub-plateaus vormen.
+  const intervals: { i0: number; i1: number; median: number }[] = [];
   let i = 0;
   while (i < bottoms.length) {
     if (bottoms[i]! < 0) {
@@ -458,13 +458,54 @@ export function computeWheelGroundLine(
     }
     if (j - i >= minPlateauWidth) {
       const values = bottoms.slice(i, j).sort((a, b) => a - b);
-      plateaus.push({
-        x0: bbox.left + i,
-        x1: bbox.left + j - 1,
-        y: percentileOf(values, 0.5),
-      });
+      intervals.push({ i0: i, i1: j - 1, median: percentileOf(values, 0.5) });
     }
     i = Math.max(j, i + 1);
+  }
+
+  // stap 2 — aangrenzende plateaus op vergelijkbare diepte mergen (band +
+  // schaduwkom horen bij hetzelfde wiel), zodat de kom niet als eigen
+  // "contact" kan winnen. De dieptevoorwaarde voorkomt dat de onderbodem
+  // (veel hoger) aan de wielen vastkettingt.
+  const maxGap = Math.max(3, Math.round(bboxWidth * 0.02));
+  const merged: { i0: number; i1: number; median: number }[] = [];
+  for (const iv of intervals) {
+    const last = merged[merged.length - 1];
+    if (
+      last &&
+      iv.i0 - last.i1 <= maxGap &&
+      Math.abs(iv.median - last.median) <= 4 * tolerance
+    ) {
+      last.i1 = iv.i1;
+      last.median = Math.max(last.median, iv.median);
+    } else {
+      merged.push({ ...iv });
+    }
+  }
+
+  // stap 3 — contactlijn per cluster: de band vult boven de contactlijn
+  // (bijna) de volle clusterbreedte, de schaduwkom eronder versmalt. Neem de
+  // diepste rij die nog ≥80% van de clusterkolommen vult.
+  const plateaus: ContactCluster[] = [];
+  for (const { i0, i1 } of merged) {
+    const cols = i1 - i0 + 1;
+    let deepest = -1;
+    for (let c = i0; c <= i1; c++) {
+      if (bottoms[c]! > deepest) deepest = bottoms[c]!;
+    }
+    let contact = deepest;
+    for (let y = deepest; y >= bbox.top; y--) {
+      let filled = 0;
+      const row = y * width;
+      for (let c = i0; c <= i1; c++) {
+        if ((alpha[row + bbox.left + c] ?? 0) > threshold) filled++;
+      }
+      if (filled >= 0.8 * cols) {
+        contact = y;
+        break;
+      }
+    }
+    plateaus.push({ x0: bbox.left + i0, x1: bbox.left + i1, y: contact });
   }
 
   if (plateaus.length === 0) {

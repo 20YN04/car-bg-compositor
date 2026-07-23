@@ -90,17 +90,17 @@ export function buildContactShadows(
         (c.y - bbox.top + 1) * placement.scale +
         cfg.SHADOW.offsetY,
       rx: (clusterWidth / 2) * 1.4,
-      ry: cfg.SHADOW.height * 0.35,
+      ry: cfg.SHADOW.height * 0.25,
     };
   });
 }
 
-function shadowSvg(
+function ambientShadowSvg(
   canvas: CanvasSize,
   placement: Placement,
   groundY: number,
   cfg: Config,
-  contacts: ShadowEllipse[],
+  hasContacts: boolean,
   profile: BackgroundProfile,
 ): Buffer {
   const s = cfg.SHADOW;
@@ -113,17 +113,34 @@ function shadowSvg(
   const rx = (placement.width * s.widthRatio) / 2;
   const ry = s.height / 2;
   // met contactclusters wordt de brede ellips een zachte ambient-schaduw en
-  // dragen de clusters het eigenlijke contact; zonder clusters (fallback)
-  // blijft het oude gedrag: één ellips op volle sterkte
-  const ambientOpacity = contacts.length > 0 ? s.opacity * 0.55 : s.opacity;
-  const shapes = [
-    `<ellipse cx="${cx}" cy="${cy}" rx="${rx}" ry="${ry}" fill="black" fill-opacity="${ambientOpacity}"/>`,
-    ...contacts.map(
+  // draagt de aparte contactlaag het eigenlijke contact; zonder clusters
+  // (fallback) blijft het oude gedrag: één ellips op volle sterkte
+  const ambientOpacity = hasContacts ? s.opacity * 0.55 : s.opacity;
+  return Buffer.from(
+    `<svg width="${canvas.width}" height="${canvas.height}" xmlns="http://www.w3.org/2000/svg">` +
+      `<ellipse cx="${cx}" cy="${cy}" rx="${rx}" ry="${ry}" fill="black" fill-opacity="${ambientOpacity}"/>` +
+      `</svg>`,
+  );
+}
+
+function contactShadowSvg(
+  canvas: CanvasSize,
+  cfg: Config,
+  contacts: ShadowEllipse[],
+  profile: BackgroundProfile,
+): Buffer {
+  const s = cfg.SHADOW;
+  const lightShift = -profile.lightDirX;
+  // strakker en donkerder dan de ambient: dit verankert de band visueel op
+  // de vloer en vangt de zachte maskertaper bij het contactpunt op
+  const opacity = Math.min(0.62, s.opacity * 1.3);
+  const shapes = contacts
+    .map(
       (c) =>
         `<ellipse cx="${c.cx + lightShift * c.ry * 1.5}" cy="${c.cy}" rx="${c.rx}" ry="${c.ry}"` +
-        ` fill="black" fill-opacity="${s.opacity}"/>`,
-    ),
-  ].join("");
+        ` fill="black" fill-opacity="${opacity}"/>`,
+    )
+    .join("");
   return Buffer.from(
     `<svg width="${canvas.width}" height="${canvas.height}" xmlns="http://www.w3.org/2000/svg">${shapes}</svg>`,
   );
@@ -183,14 +200,22 @@ export async function compositeImage(
     .removeAlpha()
     .toBuffer();
 
+  const contacts = input.contactShadows ?? [];
   const shadow = await sharp(
-    shadowSvg(
-      canvas, placement, input.contactY, cfg, input.contactShadows ?? [], input.profile,
+    ambientShadowSvg(
+      canvas, placement, input.contactY, cfg, contacts.length > 0, input.profile,
     ),
   )
     .blur(cfg.SHADOW.blur * input.profile.lightSoftness)
     .png()
     .toBuffer();
+  const contactShadow =
+    contacts.length > 0
+      ? await sharp(contactShadowSvg(canvas, cfg, contacts, input.profile))
+          .blur(Math.max(3, cfg.SHADOW.blur * 0.4))
+          .png()
+          .toBuffer()
+      : null;
 
   const scaledW = Math.max(1, Math.round(placement.width));
   const scaledH = Math.max(1, Math.round(placement.height));
@@ -226,6 +251,7 @@ export async function compositeImage(
   }
 
   const layers: sharp.OverlayOptions[] = [{ input: shadow, blend: "multiply" }];
+  if (contactShadow) layers.push({ input: contactShadow, blend: "multiply" });
 
   // vloerreflectie: verticaal gespiegelde uitsnede onder de contactlijn met
   // snelle opacity-fade — puur flip + gradientmasker + blur
