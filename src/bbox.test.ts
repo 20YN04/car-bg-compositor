@@ -281,11 +281,12 @@ describe("wielcontact-grondlijn (regressie: slagschaduw onder wiel)", () => {
     fillRect(alpha, 400, 100, 50, 299, 200); // romp
     fillRect(alpha, 400, 130, 201, 170, 240); // wiel links, contact op 240
     fillRect(alpha, 400, 230, 201, 270, 240); // wiel rechts
-    // brede, rónde schaduwblob onder het linkerwiel tot 28px lager: breed
-    // genoeg (>5% van de kolommen) om de percentielmethode te misleiden
+    // brede, spits toelopende schaduwblob onder het linkerwiel tot 28px
+    // lager: breed genoeg (>5% van de kolommen) om de percentielmethode te
+    // misleiden, maar nergens vlak genoeg voor een wielplateau
     for (let i = 0; i < 24; i++) {
       const x = 133 + i;
-      const depth = Math.max(1, Math.round(28 * Math.sin((Math.PI * (i + 1)) / 26)));
+      const depth = Math.max(1, Math.round(28 - Math.abs(i - 12) * 2.4));
       fillRect(alpha, 400, x, 241, x, 240 + depth);
     }
     const result = analyzeAlpha(alpha, 400, 300, OPTS);

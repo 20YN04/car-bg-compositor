@@ -419,12 +419,8 @@ export function computeWheelGroundLine(
 ): WheelGroundResult {
   const bboxHeight = bbox.bottom - bbox.top + 1;
   const bboxWidth = bbox.right - bbox.left + 1;
-  // ruime contactband zodat óók wielen boven een diepere schaduwblob meedoen
-  const bandDepth = Math.max(6, Math.round(bboxHeight * 0.15));
-  const contactMinY = percentileGroundLine - bandDepth;
-  const maxGap = Math.max(2, Math.round(bboxWidth * 0.02));
-  const minClusterWidth = Math.max(3, Math.round(bboxWidth * 0.025));
-  const maxSpread = Math.max(6, Math.round(bboxHeight * 0.03));
+  const tolerance = Math.max(3, Math.round(bboxHeight * 0.01));
+  const minPlateauWidth = Math.max(4, Math.round(bboxWidth * 0.04));
 
   const scanBottom = Math.min(bbox.bottom, adjustedBottom);
   const bottoms: number[] = [];
@@ -439,45 +435,48 @@ export function computeWheelGroundLine(
     bottoms.push(bottomY);
   }
 
-  const clusters: ContactCluster[] = [];
-  let start = -1;
-  let gap = 0;
-  let lastContact = -1;
-  const flush = (endIdx: number): void => {
-    if (start < 0) return;
-    if (endIdx - start + 1 >= minClusterWidth) {
-      const values = [];
-      for (let i = start; i <= endIdx; i++) {
-        if (bottoms[i]! >= contactMinY) values.push(bottoms[i]!);
-      }
-      values.sort((a, b) => a - b);
-      const spread = percentileOf(values, 0.9) - percentileOf(values, 0.1);
-      if (spread <= maxSpread) {
-        clusters.push({
-          x0: bbox.left + start,
-          x1: bbox.left + endIdx,
-          y: percentileOf(values, 0.5),
-        });
-      }
+  // plateaus: maximale runs waarvan de onderkant vlak blijft (±tolerance).
+  // Wielcontact is vlak en breed; een ronde schaduwblob haalt de vereiste
+  // vlakke breedte niet.
+  const plateaus: ContactCluster[] = [];
+  let i = 0;
+  while (i < bottoms.length) {
+    if (bottoms[i]! < 0) {
+      i++;
+      continue;
     }
-    start = -1;
-    gap = 0;
-  };
-  for (let i = 0; i < bottoms.length; i++) {
-    if (bottoms[i]! >= contactMinY && bottoms[i]! >= 0) {
-      if (start < 0) start = i;
-      lastContact = i;
-      gap = 0;
-    } else if (start >= 0 && ++gap > maxGap) {
-      flush(lastContact);
+    let runMin = bottoms[i]!;
+    let runMax = bottoms[i]!;
+    let j = i + 1;
+    while (j < bottoms.length && bottoms[j]! >= 0) {
+      const nextMin = Math.min(runMin, bottoms[j]!);
+      const nextMax = Math.max(runMax, bottoms[j]!);
+      if (nextMax - nextMin > 2 * tolerance) break;
+      runMin = nextMin;
+      runMax = nextMax;
+      j++;
     }
+    if (j - i >= minPlateauWidth) {
+      const values = bottoms.slice(i, j).sort((a, b) => a - b);
+      plateaus.push({
+        x0: bbox.left + i,
+        x1: bbox.left + j - 1,
+        y: percentileOf(values, 0.5),
+      });
+    }
+    i = Math.max(j, i + 1);
   }
-  flush(lastContact);
 
-  if (clusters.length === 0) {
+  if (plateaus.length === 0) {
     return { groundLine: percentileGroundLine, clusters: [], fallback: true };
   }
-  const groundLine = Math.max(...clusters.map((c) => c.y));
+  const groundLine = Math.max(...plateaus.map((c) => c.y));
+  // alleen plateaus nabij grondniveau zijn wielcontact; de band is ruim
+  // genoeg voor het verre wiel in een 3/4-view (dat hoger in beeld staat en
+  // zijn contactschaduw op zijn eigen niveau krijgt), maar sluit
+  // onderbodem/sideskirt-plateaus uit
+  const groundBand = Math.max(6, Math.round(bboxHeight * 0.05));
+  const clusters = plateaus.filter((c) => c.y >= groundLine - groundBand);
   return { groundLine, clusters, fallback: false };
 }
 
