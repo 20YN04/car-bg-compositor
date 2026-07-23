@@ -8,6 +8,7 @@ import {
   analyzeAlpha,
   applyInstanceMatte,
   cleanAlpha,
+  clustersFromWheelBoxes,
   dilateMask,
   erodeAlpha,
   restrictAlphaToBox,
@@ -21,7 +22,14 @@ import {
   type Placement,
 } from "./composite.js";
 import { defaultConfig, type Config } from "./config.js";
-import { aiStats, detectPlates, detectWindows, segmentByBoxes, visualYesNo } from "./ai.js";
+import {
+  aiStats,
+  detectPlates,
+  detectWheels,
+  detectWindows,
+  segmentByBoxes,
+  visualYesNo,
+} from "./ai.js";
 import { applyWindowTint, filterBoxesOnCar, filterPlausibleWindowBoxes } from "./windows.js";
 import { getCarBox, getCutout, maskStats } from "./mask.js";
 import { buildContactShadows, type CanvasRect } from "./composite.js";
@@ -425,6 +433,33 @@ async function processImage(
     cfg,
   );
 
+  // wielposities via detectie: contour-geometrie mist verre wielen die
+  // nauwelijks onder de onderbodemlijn uitsteken (RVV-achterwiel)
+  let shadowClusters = analysis.contactClusters;
+  if (cli.ai && analysis.bbox) {
+    try {
+      const wheelBoxes = filterBoxesOnCar(
+        (await detectWheels(inputBytes, CACHE_DIR, cfg.AI, cli.useCache)).filter(
+          (w) =>
+            w.w * w.h <=
+              0.15 *
+                (analysis.bbox!.right - analysis.bbox!.left + 1) *
+                (analysis.bbox!.bottom - analysis.bbox!.top + 1) &&
+            w.w <= 0.35 * (analysis.bbox!.right - analysis.bbox!.left + 1),
+        ),
+        alpha, width, height, cfg.ALPHA_THRESHOLD,
+      );
+      const detected = clustersFromWheelBoxes(
+        wheelBoxes, alpha, width, height, analysis.bbox, cfg.ALPHA_THRESHOLD,
+      );
+      if (detected.length > 0) shadowClusters = detected;
+    } catch (err) {
+      console.warn(
+        `  ⚠ ${file}: wieldetectie overgeslagen: ${err instanceof Error ? err.message : err}`,
+      );
+    }
+  }
+
   let outJpeg: Buffer | null = null;
   let plateStatus: PlateStatus = plateEnabled ? "none" : "off";
   if (analysis.bbox && placement) {
@@ -432,7 +467,7 @@ async function processImage(
       {
         rgba: data, width, height, bbox: analysis.bbox, placement, backgroundPath,
         contactShadows: buildContactShadows(
-          analysis.contactClusters, analysis.bbox, placement, cfg,
+          shadowClusters, analysis.bbox, placement, cfg,
         ),
         profile,
         contactY,
@@ -479,7 +514,8 @@ async function processImage(
         matteRemoved,
         plates: plates.length,
         plateStatus,
-        contactClusters: analysis.contactClusters.length,
+        contactClusters: shadowClusters.length,
+        wheelClusters: shadowClusters,
         groundTrim: analysis.groundTrim,
         groundTrimmedPx,
         groundFallback: analysis.groundFallback,
@@ -553,7 +589,7 @@ function printSummary(results: ImageResult[], cfg: Config): void {
   const perImage =
     cfg.COST_PER_CALL_USD +
     (cfg.DETECT.enabled ? cfg.AI.costPerDetection : 0) +
-    (cfg.AI.enabled ? cfg.AI.costPerDetection + 2 * cfg.AI.costPerQuery : 0) +
+    (cfg.AI.enabled ? 2 * cfg.AI.costPerDetection + 2 * cfg.AI.costPerQuery : 0) +
     (cfg.WINDOWS.enabled ? cfg.AI.costPerDetection + cfg.AI.costPerSegment : 0) +
     (cfg.MATTE.enabled ? cfg.AI.costPerSegment : 0);
   const monthly = cfg.MONTHLY_VOLUME * perImage;

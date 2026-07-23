@@ -525,31 +525,56 @@ export function computeWheelGroundLine(
   }
   const groundLine = Math.max(...plateaus.map((c) => c.y));
 
-  // wielcontact-clusters: nabij de grondlijn, óf een lokaal minimum van de
-  // ondercontour (het verre wiel in een sterke 3/4-view staat door
-  // perspectief tot ~25% boven de grondlijn maar steekt wél omlaag t.o.v.
-  // zijn buren — de onderbodem juist niet en blijft zo buiten beeld)
+  // wielcontact-clusters voor de contactschaduwen: (a) plateaus nabij de
+  // grondlijn, plus (b) neerwaartse bulten t.o.v. een breed-gemediaande
+  // contour — het verre wiel in een sterke 3/4-view staat door perspectief
+  // tot ~25% boven de grondlijn maar steekt als bult omlaag; de aflopende
+  // onderbodem/rocker doet dat niet.
   const groundBand = Math.max(6, Math.round(bboxHeight * 0.05));
-  const minProtrusion = Math.max(4, Math.round(bboxHeight * 0.02));
-  const neighborRef = (from: number, to: number): number | null => {
-    const vals: number[] = [];
-    for (let c = Math.max(0, from); c <= Math.min(bottoms.length - 1, to); c++) {
-      if (bottoms[c]! >= 0) vals.push(bottoms[c]!);
+  const clusters = plateaus.filter((c) => c.y >= groundLine - groundBand);
+
+  const window = Math.max(20, Math.round(bboxWidth * 0.2));
+  const minProtrusion = Math.max(6, Math.round(bboxHeight * 0.02));
+  const minBumpWidth = Math.max(4, Math.round(bboxWidth * 0.02));
+  let runStart = -1;
+  const flushBump = (end: number): void => {
+    if (runStart < 0) return;
+    if (end - runStart >= minBumpWidth) {
+      const vals = bottoms.slice(runStart, end).sort((a, b) => a - b);
+      const bump: ContactCluster = {
+        x0: bbox.left + runStart,
+        x1: bbox.left + end - 1,
+        y: percentileOf(vals, 0.8),
+      };
+      // dedupe met near-ground clusters op overlap
+      const overlaps = clusters.some(
+        (c) => Math.min(c.x1, bump.x1) - Math.max(c.x0, bump.x0) > (bump.x1 - bump.x0) / 2,
+      );
+      if (!overlaps) clusters.push(bump);
     }
-    if (vals.length === 0) return null;
-    vals.sort((a, b) => a - b);
-    return percentileOf(vals, 0.5);
+    runStart = -1;
   };
-  const clusters = plateaus.filter((c) => {
-    if (c.y >= groundLine - groundBand) return true;
-    const i0 = c.x0 - bbox.left;
-    const i1 = c.x1 - bbox.left;
-    const left = neighborRef(i0 - 12, i0 - 3);
-    const right = neighborRef(i1 + 3, i1 + 12);
-    const deeperThanLeft = left === null || c.y >= left + minProtrusion;
-    const deeperThanRight = right === null || c.y >= right + minProtrusion;
-    return deeperThanLeft && deeperThanRight && (left !== null || right !== null);
-  });
+  for (let c = 0; c < bottoms.length; c++) {
+    let isBump = false;
+    if (bottoms[c]! >= 0) {
+      const lo = Math.max(0, c - window);
+      const hi = Math.min(bottoms.length - 1, c + window);
+      const vals: number[] = [];
+      for (let n = lo; n <= hi; n++) {
+        if (bottoms[n]! >= 0) vals.push(bottoms[n]!);
+      }
+      vals.sort((a, b) => a - b);
+      const smoothed = percentileOf(vals, 0.5);
+      isBump = bottoms[c]! >= smoothed + minProtrusion;
+    }
+    if (isBump) {
+      if (runStart < 0) runStart = c;
+    } else {
+      flushBump(c);
+    }
+  }
+  flushBump(bottoms.length);
+  clusters.sort((a, b) => a.x0 - b.x0);
   return { groundLine, clusters, fallback: false };
 }
 
@@ -575,6 +600,42 @@ export function trimAlphaBelow(
     }
   }
   return removed;
+}
+
+/**
+ * Contactclusters uit gedetecteerde wielboxen (Florence): per box het
+ * diepste maskcontact binnen die kolommen. Robuuster dan contourgeometrie
+ * voor verre wielen die nauwelijks onder de onderbodemlijn uitsteken.
+ */
+export function clustersFromWheelBoxes(
+  wheelBoxes: { x: number; y: number; w: number; h: number }[],
+  alpha: Uint8Array,
+  width: number,
+  height: number,
+  bbox: BBox,
+  threshold: number,
+): ContactCluster[] {
+  const clusters: ContactCluster[] = [];
+  for (const box of wheelBoxes) {
+    const x0 = Math.max(bbox.left, Math.round(box.x));
+    const x1 = Math.min(bbox.right, Math.round(box.x + box.w - 1));
+    if (x1 - x0 < 4) continue;
+    const boxBottom = Math.min(bbox.bottom, Math.round(box.y + box.h - 1) + 8);
+    const bottoms: number[] = [];
+    for (let x = x0; x <= x1; x++) {
+      for (let y = boxBottom; y >= bbox.top; y--) {
+        if ((alpha[y * width + x] ?? 0) > threshold) {
+          bottoms.push(y);
+          break;
+        }
+      }
+    }
+    if (bottoms.length < 4) continue;
+    bottoms.sort((a, b) => a - b);
+    const y = bottoms[Math.min(bottoms.length - 1, Math.floor(0.9 * (bottoms.length - 1)))]!;
+    clusters.push({ x0, x1, y });
+  }
+  return clusters.sort((a, b) => a.x0 - b.x0);
 }
 
 export function analyzeAlpha(

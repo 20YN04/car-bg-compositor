@@ -85,6 +85,15 @@ export async function detectPlates(
   return detectObjects(imageBytes, "license plate", "plates", cacheDir, aiCfg, useCache);
 }
 
+export async function detectWheels(
+  imageBytes: Buffer,
+  cacheDir: string,
+  aiCfg: AiConfig,
+  useCache: boolean,
+): Promise<PlateBox[]> {
+  return detectObjects(imageBytes, "wheel", "wheels", cacheDir, aiCfg, useCache);
+}
+
 export async function detectWindows(
   imageBytes: Buffer,
   prompt: string,
