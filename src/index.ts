@@ -21,7 +21,8 @@ import {
 import { defaultConfig, type Config } from "./config.js";
 import { aiStats, detectPlates, visualYesNo } from "./ai.js";
 import { getCarBox, getCutout, maskStats } from "./mask.js";
-import { buildContactShadows, mapRectToCanvas, type CanvasRect } from "./composite.js";
+import { buildContactShadows, type CanvasRect } from "./composite.js";
+import { anonymizePlates, computePlateRegions, type PlateStatus } from "./plate.js";
 import { runQA, type QAWarning } from "./qa.js";
 
 const IN_DIR = "./in";
@@ -62,6 +63,7 @@ function parseCli(): { cfg: Config; cli: CliOptions } {
       "no-debug": { type: "boolean", default: false },
       "no-ai": { type: "boolean", default: false },
       "no-detect": { type: "boolean", default: false },
+      plate: { type: "string" },
     },
   });
 
@@ -75,6 +77,12 @@ function parseCli(): { cfg: Config; cli: CliOptions } {
     if (!Number.isFinite(cfg.CAR_WIDTH_RATIO) || cfg.CAR_WIDTH_RATIO <= 0 || cfg.CAR_WIDTH_RATIO > 1) {
       throw new Error("--car-width moet tussen 0 en 1 liggen");
     }
+  }
+  if (values.plate !== undefined) {
+    if (!["blur", "replace", "off"].includes(values.plate)) {
+      throw new Error("--plate moet blur, replace of off zijn");
+    }
+    cfg.PLATE.mode = values.plate as Config["PLATE"]["mode"];
   }
   return {
     cfg,
@@ -240,29 +248,18 @@ async function processImage(
   }
   // nummerplaten detecteren en mappen naar canvascoördinaten
   let plates: CanvasRect[] = [];
-  const plateEnabled = cfg.AI.enabled && cli.ai && analysis.bbox !== null && placement !== null;
+  const plateEnabled =
+    cfg.PLATE.mode !== "off" &&
+    cli.ai &&
+    analysis.bbox !== null &&
+    placement !== null;
   if (plateEnabled && analysis.bbox && placement) {
     const inputBytes = await readFile(inputPath);
     const detected = await detectPlates(inputBytes, CACHE_DIR, cfg.AI, cli.useCache);
-    plates = detected
-      .filter((p) => {
-        // alleen platen die daadwerkelijk op de gemaskeerde auto liggen
-        const cx = Math.round(p.x + p.w / 2);
-        const cy = Math.round(p.y + p.h / 2);
-        return (
-          cx >= 0 && cx < width && cy >= 0 && cy < height &&
-          (alpha[cy * width + cx] ?? 0) > cfg.ALPHA_THRESHOLD
-        );
-      })
-      // kleine marge zodat de originele plaat gegarandeerd volledig bedekt is
-      .map((p) => ({
-        x: p.x - p.w * 0.05,
-        y: p.y - p.h * 0.04,
-        w: p.w * 1.1,
-        h: p.h * 1.08,
-      }))
-      .map((p) => mapRectToCanvas(p, analysis.bbox!, placement!))
-      .filter((r) => r.width >= 8 && r.height >= 4);
+    plates = computePlateRegions(
+      detected, alpha, width, height, analysis.bbox, placement,
+      cfg.CANVAS, cfg.ALPHA_THRESHOLD,
+    );
   }
 
   const warnings = runQA(
@@ -284,6 +281,7 @@ async function processImage(
 
   let outJpeg: Buffer | null = null;
   let contactClusterCount = 0;
+  let plateStatus: PlateStatus = plateEnabled ? "none" : "off";
   if (analysis.bbox && placement) {
     const clusters = computeContactClusters(
       alpha, width, height, analysis.bbox,
@@ -291,14 +289,20 @@ async function processImage(
       cfg.ALPHA_THRESHOLD,
     );
     contactClusterCount = clusters.length;
-    outJpeg = await compositeImage(
+    const composited = await compositeImage(
       {
         rgba: data, width, height, bbox: analysis.bbox, placement, backgroundPath,
-        plates, plateText: cfg.AI.plateText,
         contactShadows: buildContactShadows(clusters, analysis.bbox, placement, cfg),
       },
       cfg,
     );
+    const anonymized = plateEnabled
+      ? await anonymizePlates(composited, plates, cfg.CANVAS, cfg.PLATE, cfg.AI.plateText)
+      : { image: composited, status: "off" as PlateStatus };
+    plateStatus = anonymized.status;
+    outJpeg = await sharp(anonymized.image)
+      .jpeg({ quality: cfg.JPEG_QUALITY })
+      .toBuffer();
     const outName = path.parse(file).name + ".jpg";
     await writeFile(path.join(OUT_DIR, outName), outJpeg);
   }
@@ -330,6 +334,7 @@ async function processImage(
         carBox: detection?.box ?? null,
         outsideBoxRemoved,
         plates: plates.length,
+        plateStatus,
         contactClusters: contactClusterCount,
       },
     );

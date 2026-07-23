@@ -49,6 +49,20 @@ export interface DetectConfig {
   boxMargin: number; // marge rond de auto-box als fractie van de boxmaat
 }
 
+export type PlateMode = "blur" | "replace" | "off";
+
+export interface PlateConfig {
+  /**
+   * blur (default): plaatregio onherkenbaar maken (GDPR, EU/België).
+   * replace: getekende plaat met AI.plateText, of overlayPath indien gezet.
+   * off: plaat onaangetast laten.
+   */
+  mode: PlateMode;
+  overlayPath?: string; // eigen plaatafbeelding voor mode 'replace'
+  blurSigma: number;
+  style: "gaussian" | "mosaic";
+}
+
 export interface AiConfig {
   enabled: boolean;
   plateText: string; // tekst op de vervangende nummerplaat
@@ -72,6 +86,7 @@ export interface Config {
   FAL: FalConfig;
   DETECT: DetectConfig;
   AI: AiConfig;
+  PLATE: PlateConfig;
   COST_PER_CALL_USD: number;
 }
 
@@ -134,6 +149,11 @@ export const defaultConfig: Config = {
     // ijken op het fal-dashboard
     costPerDetection: 0.001,
     costPerQuery: 0.001,
+  },
+  PLATE: {
+    mode: "blur",
+    blurSigma: 12,
+    style: "gaussian",
   },
   // IJken op het fal.ai-dashboard: prijs staat niet in de publieke docs.
   COST_PER_CALL_USD: 0.002,

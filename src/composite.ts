@@ -61,32 +61,6 @@ export function mapRectToCanvas(
   };
 }
 
-function plateSvg(canvas: CanvasSize, plates: CanvasRect[], text: string): Buffer {
-  const shapes = plates
-    .map((p) => {
-      const r = Math.min(p.width, p.height) * 0.08;
-      // librsvg ondersteunt textLength niet betrouwbaar: fontgrootte zelf
-      // passend maken (Arial bold ≈ 0.62 × fontSize per teken)
-      const fontSize = Math.min(
-        p.height * 0.62,
-        (p.width * 0.85) / (Math.max(1, text.length) * 0.62),
-      );
-      const cx = p.x + p.width / 2;
-      const cy = p.y + p.height / 2;
-      return (
-        `<rect x="${p.x}" y="${p.y}" width="${p.width}" height="${p.height}" rx="${r}"` +
-        ` fill="#f4f4f4" stroke="#1a1a1a" stroke-width="${Math.max(1, p.height * 0.04)}"/>` +
-        `<text x="${cx}" y="${cy}" font-family="Arial, sans-serif" font-weight="bold"` +
-        ` font-size="${fontSize}" fill="#1a1a1a" text-anchor="middle"` +
-        ` dominant-baseline="central">${text}</text>`
-      );
-    })
-    .join("");
-  return Buffer.from(
-    `<svg width="${canvas.width}" height="${canvas.height}" xmlns="http://www.w3.org/2000/svg">${shapes}</svg>`,
-  );
-}
-
 export interface ShadowEllipse {
   cx: number;
   cy: number;
@@ -156,12 +130,14 @@ export interface CompositeInput {
   bbox: BBox;
   placement: Placement;
   backgroundPath: string;
-  plates?: CanvasRect[]; // nummerplaten in canvascoördinaten, overlay met plateText
-  plateText?: string;
   contactShadows?: ShadowEllipse[]; // per wielcontact, uit buildContactShadows
 }
 
-/** Composite: achtergrond → schaduw (multiply) → auto. Schrijft JPEG-bytes. */
+/**
+ * Composite: achtergrond → schaduw (multiply) → auto. Geeft een PNG-buffer
+ * terug zodat de plaat-anonimisatie verliesvrij kan volgen; de aanroeper
+ * encodeert daarna éénmalig naar JPEG.
+ */
 export async function compositeImage(
   input: CompositeInput,
   cfg: Config,
@@ -214,17 +190,12 @@ export async function compositeImage(
     top = Math.max(0, top);
   }
 
-  const layers: sharp.OverlayOptions[] = [
-    { input: shadow, blend: "multiply" },
-    { input: car, left, top },
-  ];
-  if (input.plates && input.plates.length > 0 && input.plateText) {
-    layers.push({ input: plateSvg(canvas, input.plates, input.plateText) });
-  }
-
   return sharp(background)
-    .composite(layers)
-    .jpeg({ quality: cfg.JPEG_QUALITY })
+    .composite([
+      { input: shadow, blend: "multiply" },
+      { input: car, left, top },
+    ])
+    .png()
     .toBuffer();
 }
 
