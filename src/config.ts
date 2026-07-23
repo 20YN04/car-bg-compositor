@@ -88,6 +88,7 @@ export interface Config {
   AI: AiConfig;
   PLATE: PlateConfig;
   COST_PER_CALL_USD: number;
+  MONTHLY_VOLUME: number; // verwacht beeldvolume voor de kostenextrapolatie
 }
 
 export const defaultConfig: Config = {
@@ -155,6 +156,11 @@ export const defaultConfig: Config = {
     blurSigma: 12,
     style: "gaussian",
   },
-  // IJken op het fal.ai-dashboard: prijs staat niet in de publieke docs.
+  /**
+   * SCHATTING — de prijs per BiRefNet-call staat niet in de publieke docs.
+   * IJk deze waarde (en AI.costPerDetection / AI.costPerQuery) op het
+   * fal.ai-dashboard vóór er beslissingen op de extrapolatie worden gebaseerd.
+   */
   COST_PER_CALL_USD: 0.002,
+  MONTHLY_VOLUME: 75_000,
 };

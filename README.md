@@ -31,7 +31,9 @@ pnpm start --ground-y 1100          # config overriden zonder file-edit
 pnpm start --car-width 0.75         # idem
 pnpm start --no-cache               # forceer nieuwe API-calls
 pnpm start --no-debug               # sla debug-output over
-pnpm start --no-ai                  # sla plaatvervanging + AI-checks over
+pnpm start --no-ai                  # sla plaat-anonimisatie + AI-checks over
+pnpm start --no-detect              # sla auto-detectie over (onbegrensd masker)
+pnpm start --plate replace          # plaat vervangen i.p.v. blurren (of: off)
 ```
 
 Resultaten komen in `./out/` (JPEG). Per beeld verschijnt in `./debug/` het
@@ -57,22 +59,36 @@ draaien (bijv. tijdens het tunen van de compositing) kost geen API-credits.
 | `JPEG_QUALITY` | uitvoerkwaliteit |
 | `QA` | drempels voor de kwaliteitswaarschuwingen |
 | `FAL` | BiRefNet-variant en resolutie (default "General Use (Heavy)" @ 2048×2048) |
-| `AI` | nummerplaatvervanging (`plateText`, default "CARREDO") via Florence-2-detectie + overlay, en AI-kwaliteitscontroles via een vision-model (masker compleet? auto op de grond?) |
+| `DETECT` | instance-aware masking: Florence-2 detecteert de auto en het masker wordt tot die box begrensd (weert slagschaduw op de grond en aangeplakte achtergrondobjecten). `minConfidence` werkt op een heuristische score (oppervlak × centraliteit) — Florence geeft zelf geen confidence |
+| `PLATE` | nummerplaat-anonimisatie: `blur` (default, GDPR), `replace` (plaat met `AI.plateText` of `overlayPath`), `off`; `style` gaussian of mosaic |
+| `AI` | plaatdetectie (Florence-2) en AI-kwaliteitscontroles via een vision-model (masker compleet? auto op de grond?) |
+| `MONTHLY_VOLUME` | beeldvolume voor de kostenextrapolatie (default 75.000) |
 | `COST_PER_CALL_USD` | prijs per API-call voor de kostenschatting — ijken op het fal-dashboard |
 
 ## Kwaliteitscontrole
 
 Niet-blokkerende waarschuwingen per beeld, gegroepeerd in de eindsamenvatting:
-te klein/groot masker, auto afgesneden aan de onderrand (grondlijn
-onbetrouwbaar), bbox raakt een beeldrand, aspect ratio die niet op een
-volledige auto wijst (interieur/detailshot), meerdere losse blobs in het
-masker, plaatsing buiten het canvas.
+
+- `EMPTY_MASK`, `MASK_TOO_SMALL`, `MASK_TOO_LARGE` — masker leeg of buiten de oppervlaktegrenzen
+- `CUT_OFF_BOTTOM` — auto afgesneden aan de onderrand, grondlijn onbetrouwbaar
+- `TOUCHES_EDGE` — bbox raakt een andere beeldrand
+- `BAD_ASPECT` — aspect ratio wijst niet op een volledige auto (interieur/detailshot)
+- `MULTIPLE_BLOBS` — meerdere losse blobs in het masker
+- `SHADOW_IN_MASK` — onderste rijen genegeerd bij de grondlijn (uitwaaierende slagschaduw)
+- `BACKGROUND_MERGE_SUSPECT` — masker stak buiten de auto-box of heeft een bult boven de daklijn
+- `NO_CAR_DETECTED` — detector vond geen auto; masker onbegrensd (oude gedrag)
+- `STRAY_MASK_REMOVED` — dun/losstaand materiaal opgeschoond (windmolen, paal)
+- `OUT_OF_CANVAS` — plaatsing valt (deels) buiten het canvas
+- `PLATE_NOT_FOUND` — geen plaat gedetecteerd, dus niet geanonimiseerd
+- `AI_MASK_SUSPECT`, `AI_NOT_GROUNDED` — het vision-model twijfelt aan masker of aarding
 
 ## Nummerplaat en AI-controles
 
 Per beeld wordt de nummerplaat gedetecteerd (`fal-ai/florence-2-large/
-caption-to-phrase-grounding`) en vervangen door een getekende plaat met de
-`AI.plateText` erop — een wiskundige overlay, geen generatieve bewerking.
+caption-to-phrase-grounding`) en geanonimiseerd volgens `PLATE.mode`:
+geblurd (default — GDPR, EU/België), vervangen door een getekende plaat met
+`AI.plateText` (of een eigen `overlayPath`-afbeelding), of onaangeraakt
+(`off`). Alles puur mathematisch — geen generatieve bewerking.
 Daarnaast beoordeelt een klein vision-model (`fal-ai/moondream2/visual-query`)
 per beeld of het masker compleet oogt en of de auto in het eindbeeld op de
 grond staat; een afwijzing verschijnt als `AI_MASK_SUSPECT` / `AI_NOT_GROUNDED`

@@ -99,12 +99,21 @@ function parseCli(): { cfg: Config; cli: CliOptions } {
 
 async function resolveBackground(cli: CliOptions, cfg: Config): Promise<string> {
   if (cli.bg) {
-    const candidates = [cli.bg, path.join(BG_DIR, cli.bg)];
-    const found = candidates.find((p) => existsSync(p));
-    if (!found) {
+    // absoluut pad is expliciete gebruikersintentie; een relatief pad moet
+    // binnen BG_DIR blijven (geen traversal via ../)
+    if (path.isAbsolute(cli.bg)) {
+      if (!existsSync(cli.bg)) throw new Error(`achtergrond niet gevonden: ${cli.bg}`);
+      return cli.bg;
+    }
+    const bgRoot = path.resolve(BG_DIR);
+    const resolved = path.resolve(BG_DIR, cli.bg);
+    if (!resolved.startsWith(bgRoot + path.sep)) {
+      throw new Error(`--bg moet binnen ${BG_DIR}/ liggen (of een absoluut pad zijn)`);
+    }
+    if (!existsSync(resolved)) {
       throw new Error(`achtergrond niet gevonden: ${cli.bg} (gezocht in ${BG_DIR}/)`);
     }
-    return found;
+    return resolved;
   }
   const defaultBg = path.join(BG_DIR, "default.png");
   if (!existsSync(defaultBg)) {
@@ -387,12 +396,14 @@ function printSummary(results: ImageResult[], cfg: Config): void {
     cfg.COST_PER_CALL_USD +
     (cfg.DETECT.enabled ? cfg.AI.costPerDetection : 0) +
     (cfg.AI.enabled ? cfg.AI.costPerDetection + 2 * cfg.AI.costPerQuery : 0);
-  const monthly = 75_000 * perImage;
+  const monthly = cfg.MONTHLY_VOLUME * perImage;
   console.log(
     `\nkosten: $${runCost.toFixed(4)} deze run ` +
       `(per beeld: $${perImage.toFixed(4)} — tarieven ijken op fal-dashboard)`,
   );
-  console.log(`extrapolatie 75.000 beelden/maand: ~$${monthly.toFixed(0)}/maand`);
+  console.log(
+    `extrapolatie ${cfg.MONTHLY_VOLUME.toLocaleString("nl-BE")} beelden/maand: ~$${monthly.toFixed(0)}/maand`,
+  );
 }
 
 async function main(): Promise<void> {
