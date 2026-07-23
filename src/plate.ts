@@ -67,30 +67,64 @@ export function computePlateRegions(
     .filter((r) => r.width >= 8 && r.height >= 4);
 }
 
-function plateSvg(canvas: CanvasSize, plates: CanvasRect[], text: string): Buffer {
-  const shapes = plates
-    .map((p) => {
-      const r = Math.min(p.width, p.height) * 0.08;
-      // librsvg ondersteunt textLength niet betrouwbaar: fontgrootte zelf
-      // passend maken (Arial bold ≈ 0.62 × fontSize per teken)
-      const fontSize = Math.min(
-        p.height * 0.62,
-        (p.width * 0.85) / (Math.max(1, text.length) * 0.62),
-      );
-      const cx = p.x + p.width / 2;
-      const cy = p.y + p.height / 2;
-      return (
-        `<rect x="${p.x}" y="${p.y}" width="${p.width}" height="${p.height}" rx="${r}"` +
-        ` fill="#f4f4f4" stroke="#1a1a1a" stroke-width="${Math.max(1, p.height * 0.04)}"/>` +
-        `<text x="${cx}" y="${cy}" font-family="Arial, sans-serif" font-weight="bold"` +
-        ` font-size="${fontSize}" fill="#1a1a1a" text-anchor="middle"` +
-        ` dominant-baseline="central">${text}</text>`
-      );
-    })
-    .join("");
-  return Buffer.from(
-    `<svg width="${canvas.width}" height="${canvas.height}" xmlns="http://www.w3.org/2000/svg">${shapes}</svg>`,
+/**
+ * Dekmasker voor de originele plaat + frame: de regio wordt geblurd zodat de
+ * omgeving (bumperkleuren, overgangen) exact behouden blijft — geen
+ * kleurpatch die als sticker opvalt.
+ */
+async function blurOverlay(
+  compositedPng: Buffer,
+  r: CanvasRect,
+  sigma: number,
+): Promise<sharp.OverlayOptions> {
+  const input = await sharp(compositedPng)
+    .extract({ left: r.x, top: r.y, width: r.width, height: r.height })
+    .blur(sigma)
+    .png()
+    .toBuffer();
+  return { input, left: r.x, top: r.y };
+}
+
+/** CARREDO-plaat in EU-verhouding: blauwe band, rand, afgeronde hoeken. */
+function carredoPlateSvg(w: number, h: number, text: string): Buffer {
+  const band = Math.max(6, Math.round(w * 0.08));
+  const r = Math.max(2, Math.round(h * 0.14));
+  const stroke = Math.max(1.5, h * 0.05);
+  const fontSize = Math.min(
+    h * 0.68,
+    ((w - band) * 0.82) / (Math.max(1, text.length) * 0.62),
   );
+  return Buffer.from(
+    `<svg width="${w}" height="${h}" xmlns="http://www.w3.org/2000/svg">` +
+      `<rect x="${stroke / 2}" y="${stroke / 2}" width="${w - stroke}" height="${h - stroke}"` +
+      ` rx="${r}" fill="#f8f9fa" stroke="#16213e" stroke-width="${stroke}"/>` +
+      `<path d="M ${stroke / 2} ${r} A ${r} ${r} 0 0 1 ${r} ${stroke / 2}` +
+      ` L ${band} ${stroke / 2} L ${band} ${h - stroke / 2} L ${r} ${h - stroke / 2}` +
+      ` A ${r} ${r} 0 0 1 ${stroke / 2} ${h - r} Z" fill="#003399"/>` +
+      `<text x="${band + (w - band) / 2}" y="${h / 2}" font-family="Arial, sans-serif"` +
+      ` font-weight="bold" font-size="${fontSize}" letter-spacing="${fontSize * 0.06}"` +
+      ` fill="#16213e" text-anchor="middle" dominant-baseline="central">${text}</text>` +
+      `</svg>`,
+  );
+}
+
+/** Past de plaat in EU-verhouding (≈4.6:1) binnen de gedetecteerde zone. */
+export function fitPlateInRegion(
+  r: CanvasRect,
+): { left: number; top: number; width: number; height: number } {
+  const aspect = 4.6;
+  let width = r.width * 0.94;
+  let height = width / aspect;
+  if (height > r.height * 0.94) {
+    height = r.height * 0.94;
+    width = height * aspect;
+  }
+  return {
+    left: Math.round(r.x + (r.width - width) / 2),
+    top: Math.round(r.y + (r.height - height) / 2),
+    width: Math.round(width),
+    height: Math.round(height),
+  };
 }
 
 /**
@@ -109,20 +143,28 @@ export async function anonymizePlates(
   if (regions.length === 0) return { image: compositedPng, status: "none" };
 
   if (plateCfg.mode === "replace") {
-    let overlays: sharp.OverlayOptions[];
-    if (plateCfg.overlayPath && existsSync(plateCfg.overlayPath)) {
-      overlays = await Promise.all(
-        regions.map(async (r) => ({
+    const overlays: sharp.OverlayOptions[] = [];
+    for (const r of regions) {
+      // eerst de originele plaat + frame laten wegvallen (blur behoudt de
+      // omgevingskleuren), dán de plaat in echte EU-verhouding
+      overlays.push(await blurOverlay(compositedPng, r, plateCfg.blurSigma));
+      const fit = fitPlateInRegion(r);
+      if (plateCfg.overlayPath && existsSync(plateCfg.overlayPath)) {
+        overlays.push({
           input: await sharp(plateCfg.overlayPath)
-            .resize(r.width, r.height, { fit: "fill" })
+            .resize(fit.width, fit.height, { fit: "fill" })
             .png()
             .toBuffer(),
-          left: r.x,
-          top: r.y,
-        })),
-      );
-    } else {
-      overlays = [{ input: plateSvg(canvas, regions, plateText) }];
+          left: fit.left,
+          top: fit.top,
+        });
+      } else {
+        overlays.push({
+          input: carredoPlateSvg(fit.width, fit.height, plateText),
+          left: fit.left,
+          top: fit.top,
+        });
+      }
     }
     const image = await sharp(compositedPng).composite(overlays).png().toBuffer();
     return { image, status: "replaced" };

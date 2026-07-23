@@ -3,7 +3,7 @@ import sharp from "sharp";
 import type { BBox } from "./bbox.js";
 import { computePlacement } from "./composite.js";
 import { defaultConfig } from "./config.js";
-import { anonymizePlates, computePlateRegions } from "./plate.js";
+import { anonymizePlates, computePlateRegions, fitPlateInRegion } from "./plate.js";
 
 const CANVAS = { width: 1920, height: 1440 };
 
@@ -58,6 +58,18 @@ describe("computePlateRegions", () => {
   });
 });
 
+describe("fitPlateInRegion", () => {
+  it("past een EU-verhouding (≈4.6:1) in een vierkante detectiezone", () => {
+    const fit = fitPlateInRegion({ x: 100, y: 100, width: 200, height: 120 });
+    expect(fit.width / fit.height).toBeCloseTo(4.6, 0);
+    expect(fit.width).toBeLessThanOrEqual(200);
+    expect(fit.height).toBeLessThanOrEqual(120);
+    // gecentreerd
+    expect(fit.left).toBeGreaterThan(100);
+    expect(fit.top).toBeGreaterThan(100);
+  });
+});
+
 describe("anonymizePlates", () => {
   const canvas = { width: 200, height: 100 };
   const region = { x: 60, y: 40, width: 80, height: 20 };
@@ -102,17 +114,21 @@ describe("anonymizePlates", () => {
     expect(await pixel(image, 10, 10)).toEqual(await pixel(img, 10, 10));
   });
 
-  it("mode replace legt een plaatoverlay over de regio", async () => {
+  it("mode replace legt een EU-plaat met blauwe band over de regio", async () => {
     const img = await testImage();
     const { image, status } = await anonymizePlates(
       img, [region], canvas, { ...defaultConfig.PLATE, mode: "replace" }, "X",
     );
     expect(status).toBe("replaced");
-    // de gele plaat is bedekt door de lichte overlay (#f4f4f4)
-    const [r, g, b] = await pixel(image, 65, 50);
+    // plaatmidden: lichte plaatachtergrond, geel origineel bedekt
+    const [r, g, b] = await pixel(image, 100, 50);
     expect(r).toBeGreaterThan(200);
     expect(g).toBeGreaterThan(200);
     expect(b).toBeGreaterThan(200);
+    // linkerkant van de plaat: blauwe EU-band
+    const [br, , bb] = await pixel(image, 65, 50);
+    expect(bb!).toBeGreaterThan(100);
+    expect(bb!).toBeGreaterThan((br ?? 0) + 40);
   });
 
   it("geen regio's → status none", async () => {
