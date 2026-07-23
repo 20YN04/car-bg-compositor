@@ -111,7 +111,12 @@ export interface BackgroundProfile {
   horizonY: number | null; // canvas-y van de vloer/wandovergang (documentatie/QA)
   contactTargetY: number; // canvas-y waar de wielcontactlijn moet landen
   floorScaleRef: number; // px per meter op de contactdiepte van deze plate
-  carWidthMeters: number; // aangenomen zichtbare autobreedte/-lengte in meters
+  /**
+   * Zichtbare spanwijdte van de auto in meters: bij zij-/3/4-aanzichten is
+   * dat de (deels verkorte) lengte (~4.4 m), niet de autobreedte van 1.8 m.
+   * Per-hoek presets (fase 4) verfijnen dit.
+   */
+  carWidthMeters: number;
   lightDirX: number; // -1..1, richting waaruit het licht komt (negatief = links)
   lightSoftness: number; // multiplier op de schaduwblur
   floorReflectivity: number; // 0..1 sterkte van de vloerreflectie
@@ -217,8 +222,8 @@ export const defaultConfig: Config = {
     "showroom.jpg": {
       horizonY: 867,
       contactTargetY: 1150,
-      floorScaleRef: 780,
-      carWidthMeters: 1.8,
+      floorScaleRef: 314,
+      carWidthMeters: 4.4,
       lightDirX: -0.35, // plate is links het lichtst
       lightSoftness: 1.2,
       floorReflectivity: 0.16,
@@ -229,8 +234,8 @@ export const defaultConfig: Config = {
   DEFAULT_PROFILE: {
     horizonY: null,
     contactTargetY: 1200,
-    floorScaleRef: 875, // ≈ oude CAR_WIDTH_RATIO 0.82 bij 1.8 m
-    carWidthMeters: 1.8,
+    floorScaleRef: 358, // ≈ oude CAR_WIDTH_RATIO 0.82 bij 4.4 m spanwijdte
+    carWidthMeters: 4.4,
     lightDirX: 0,
     lightSoftness: 1,
     floorReflectivity: 0.12,

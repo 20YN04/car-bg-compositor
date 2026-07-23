@@ -42,6 +42,8 @@ interface CliOptions {
   debug: boolean;
   ai: boolean;
   detect: boolean;
+  groundYOverride?: number; // --ground-y wint van het BackgroundProfile
+  carWidthOverride?: number; // --car-width (ratio) wint van floorScaleRef
 }
 
 const MASK_PROMPT =
@@ -98,6 +100,9 @@ function parseCli(): { cfg: Config; cli: CliOptions } {
       debug: !values["no-debug"],
       ai: !values["no-ai"],
       detect: !values["no-detect"],
+      groundYOverride: values["ground-y"] !== undefined ? cfg.GROUND_Y : undefined,
+      carWidthOverride:
+        values["car-width"] !== undefined ? cfg.CAR_WIDTH_RATIO : undefined,
     },
   };
 }
@@ -297,6 +302,15 @@ async function processImage(
     minBlobArea: cfg.QA.minBlobArea,
   });
 
+  // fase 1 — plaatsing op de gekalibreerde vloer van deze plate: contactlijn
+  // op contactTargetY, schaal via px/meter i.p.v. vaste canvasfractie
+  const profile =
+    cfg.BACKGROUND_PROFILES[path.basename(backgroundPath)] ?? cfg.DEFAULT_PROFILE;
+  const contactY = cli.groundYOverride ?? profile.contactTargetY;
+  const widthRatio =
+    cli.carWidthOverride ??
+    (profile.carWidthMeters * profile.floorScaleRef) / cfg.CANVAS.width;
+
   // aangesmolten slagschaduw onder de wiellijn uit het masker snijden, zodat
   // die niet als grijze appendage onder de auto in het eindbeeld belandt
   let groundTrimmedPx = 0;
@@ -314,8 +328,8 @@ async function processImage(
       analysis.bbox,
       analysis.groundLine,
       cfg.CANVAS,
-      cfg.GROUND_Y,
-      cfg.CAR_WIDTH_RATIO,
+      contactY,
+      widthRatio,
     );
   }
   // ruiten donker tinten zodat de oorspronkelijke omgeving niet door het
@@ -389,9 +403,6 @@ async function processImage(
     cfg,
   );
 
-  const profile =
-    cfg.BACKGROUND_PROFILES[path.basename(backgroundPath)] ?? cfg.DEFAULT_PROFILE;
-
   let outJpeg: Buffer | null = null;
   let plateStatus: PlateStatus = plateEnabled ? "none" : "off";
   if (analysis.bbox && placement) {
@@ -402,7 +413,7 @@ async function processImage(
           analysis.contactClusters, analysis.bbox, placement, cfg,
         ),
         profile,
-        contactY: cfg.GROUND_Y,
+        contactY,
       },
       cfg,
     );
@@ -451,6 +462,8 @@ async function processImage(
         groundTrimmedPx,
         groundFallback: analysis.groundFallback,
         windows: windowInfo,
+        contactY,
+        widthRatio: Number(widthRatio.toFixed(4)),
         profile: {
           background: path.basename(backgroundPath),
           contactTargetY: profile.contactTargetY,
