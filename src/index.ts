@@ -26,6 +26,7 @@ import { applyWindowTint, filterBoxesOnCar, filterPlausibleWindowBoxes } from ".
 import { getCarBox, getCutout, maskStats } from "./mask.js";
 import { buildContactShadows, type CanvasRect } from "./composite.js";
 import { anonymizePlates, computePlateRegions, type PlateStatus } from "./plate.js";
+import { backgroundMeans, cutoutMeans, harmonizeColors } from "./harmonize.js";
 import { runQA, type QAWarning } from "./qa.js";
 
 const IN_DIR = "./in";
@@ -44,6 +45,7 @@ interface CliOptions {
   detect: boolean;
   groundYOverride?: number; // --ground-y wint van het BackgroundProfile
   carWidthOverride?: number; // --car-width (ratio) wint van floorScaleRef
+  preset?: keyof Config["PRESETS"]; // fase 4: per-hoek kadrering
 }
 
 const MASK_PROMPT =
@@ -69,7 +71,9 @@ function parseCli(): { cfg: Config; cli: CliOptions } {
       "no-ai": { type: "boolean", default: false },
       "no-detect": { type: "boolean", default: false },
       "no-windows": { type: "boolean", default: false },
+      "no-harmonize": { type: "boolean", default: false },
       plate: { type: "string" },
+      preset: { type: "string" },
     },
   });
 
@@ -85,6 +89,10 @@ function parseCli(): { cfg: Config; cli: CliOptions } {
     }
   }
   if (values["no-windows"]) cfg.WINDOWS.enabled = false;
+  if (values["no-harmonize"]) cfg.HARMONIZE.enabled = false;
+  if (values.preset !== undefined && !(values.preset in cfg.PRESETS)) {
+    throw new Error("--preset moet side, front34 of rear34 zijn");
+  }
   if (values.plate !== undefined) {
     if (!["blur", "replace", "off"].includes(values.plate)) {
       throw new Error("--plate moet blur, replace of off zijn");
@@ -103,6 +111,7 @@ function parseCli(): { cfg: Config; cli: CliOptions } {
       groundYOverride: values["ground-y"] !== undefined ? cfg.GROUND_Y : undefined,
       carWidthOverride:
         values["car-width"] !== undefined ? cfg.CAR_WIDTH_RATIO : undefined,
+      preset: values.preset as CliOptions["preset"],
     },
   };
 }
@@ -306,10 +315,12 @@ async function processImage(
   // op contactTargetY, schaal via px/meter i.p.v. vaste canvasfractie
   const profile =
     cfg.BACKGROUND_PROFILES[path.basename(backgroundPath)] ?? cfg.DEFAULT_PROFILE;
-  const contactY = cli.groundYOverride ?? profile.contactTargetY;
+  const preset = cli.preset ? cfg.PRESETS[cli.preset] : undefined;
+  const contactY =
+    cli.groundYOverride ?? preset?.contactTargetY ?? profile.contactTargetY;
+  const spanMeters = preset?.spanMeters ?? profile.carWidthMeters;
   const widthRatio =
-    cli.carWidthOverride ??
-    (profile.carWidthMeters * profile.floorScaleRef) / cfg.CANVAS.width;
+    cli.carWidthOverride ?? (spanMeters * profile.floorScaleRef) / cfg.CANVAS.width;
 
   // aangesmolten slagschaduw onder de wiellijn uit het masker snijden, zodat
   // die niet als grijze appendage onder de auto in het eindbeeld belandt
@@ -332,6 +343,15 @@ async function processImage(
       widthRatio,
     );
   }
+  // fase 3 — harmonisatie: buitenlicht-zweem subtiel richting de
+  // achtergrondtoon trekken vóór de ruit-tint
+  let harmonizeGains: { r: number; g: number; b: number } | null = null;
+  if (cfg.HARMONIZE.enabled && analysis.bbox) {
+    const bg = await backgroundMeans(backgroundPath, cfg.CANVAS.width, cfg.CANVAS.height);
+    const car = cutoutMeans(data, alpha, width, height);
+    harmonizeGains = harmonizeColors(data, alpha, width, height, car, bg, cfg.HARMONIZE);
+  }
+
   // ruiten donker tinten zodat de oorspronkelijke omgeving niet door het
   // glas zichtbaar blijft (detectie + SAM2-masker + wiskundige verdonkering)
   const windowInfo = { boxes: 0, tintedPixels: 0 };
@@ -464,6 +484,14 @@ async function processImage(
         windows: windowInfo,
         contactY,
         widthRatio: Number(widthRatio.toFixed(4)),
+        preset: cli.preset ?? null,
+        harmonizeGains: harmonizeGains
+          ? {
+              r: Number(harmonizeGains.r.toFixed(3)),
+              g: Number(harmonizeGains.g.toFixed(3)),
+              b: Number(harmonizeGains.b.toFixed(3)),
+            }
+          : null,
         profile: {
           background: path.basename(backgroundPath),
           contactTargetY: profile.contactTargetY,

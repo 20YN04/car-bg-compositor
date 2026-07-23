@@ -101,6 +101,19 @@ export interface AiConfig {
   costPerSegment: number;
 }
 
+export interface HarmonizeConfig {
+  enabled: boolean;
+  strength: number; // 0..1: hoe ver richting de achtergrondtoon
+  maxGain: number; // cap op de per-kanaal gain-afwijking (bv. 0.12 = ±12%)
+}
+
+export type AnglePreset = "side" | "front34" | "rear34";
+
+export interface PresetOverride {
+  contactTargetY?: number;
+  spanMeters?: number; // zichtbare spanwijdte voor deze hoek
+}
+
 export interface BackgroundProfile {
   /**
    * Kalibratie per achtergrond-plate (fase 1/2): plaatsing, schaal, licht en
@@ -142,6 +155,8 @@ export interface Config {
   WINDOWS: WindowsConfig;
   BACKGROUND_PROFILES: Record<string, BackgroundProfile>; // key = bestandsnaam
   DEFAULT_PROFILE: BackgroundProfile;
+  HARMONIZE: HarmonizeConfig;
+  PRESETS: Record<AnglePreset, PresetOverride>; // fase 4: per-hoek kadrering
   COST_PER_CALL_USD: number;
   MONTHLY_VOLUME: number; // verwacht beeldvolume voor de kostenextrapolatie
 }
@@ -240,6 +255,16 @@ export const defaultConfig: Config = {
     lightSoftness: 1,
     floorReflectivity: 0.12,
     reflectionHeightRatio: 0.3,
+  },
+  HARMONIZE: {
+    enabled: true,
+    strength: 0.35,
+    maxGain: 0.12,
+  },
+  PRESETS: {
+    side: { spanMeters: 4.3 },
+    front34: { spanMeters: 4.6 },
+    rear34: { spanMeters: 4.6 },
   },
   WINDOWS: {
     enabled: true,

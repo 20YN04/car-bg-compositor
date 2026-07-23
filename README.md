@@ -35,6 +35,8 @@ pnpm start --no-ai                  # sla plaat-anonimisatie + AI-checks over
 pnpm start --no-detect              # sla auto-detectie over (onbegrensd masker)
 pnpm start --plate replace          # plaat vervangen i.p.v. blurren (of: off)
 pnpm start --no-windows             # ruiten niet donker tinten
+pnpm start --no-harmonize           # kleur/belichting niet matchen
+pnpm start --preset side            # per-hoek kadrering (side/front34/rear34)
 ```
 
 Resultaten komen in `./out/` (JPEG). Per beeld verschijnt in `./debug/` het
@@ -64,6 +66,10 @@ draaien (bijv. tijdens het tunen van de compositing) kost geen API-credits.
 | `PLATE` | nummerplaat-anonimisatie: `blur` (default, GDPR), `replace` (plaat met `AI.plateText` of `overlayPath`), `off`; `style` gaussian of mosaic |
 | `AI` | plaatdetectie (Florence-2) en AI-kwaliteitscontroles via een vision-model (masker compleet? auto op de grond?) |
 | `WINDOWS` | ruiten donker tinten (Florence-2-detectie + SAM2-masker + wiskundige verdonkering) zodat de oorspronkelijke omgeving niet door het glas zichtbaar blijft; `tintOpacity`/`tintColor`/`featherSigma` bepalen de look |
+| `MATTE` | instance-matte: BiRefNet-alfa begrensd met een SAM2-instancemasker (auto-box als prompt) — scherpe wielranden, geen aangesmolten grondschaduw |
+| `BACKGROUND_PROFILES` | kalibratie per achtergrond-plate: `contactTargetY` (vloerlijn), `floorScaleRef` (px/m), lichtrichting/zachtheid, vloerreflectiviteit. **Belangrijk:** de camerahoogte/-hoek van de plate moet bij de auto-shots passen; willekeurige plates werken niet — een mismatch is een plate-keuzeprobleem, geen codebug |
+| `HARMONIZE` | kleur/belichting van de auto subtiel richting de achtergrondtoon (per-kanaal gains met cap) — puur curves, geen generatieve stap |
+| `PRESETS` | per-hoek kadrering (side/front34/rear34): eigen spanwijdte en optioneel contactlijn |
 | `MONTHLY_VOLUME` | beeldvolume voor de kostenextrapolatie (default 75.000) |
 | `COST_PER_CALL_USD` | prijs per API-call voor de kostenschatting — ijken op het fal-dashboard |
 
