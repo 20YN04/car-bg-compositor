@@ -49,6 +49,8 @@ export interface DetectConfig {
   boxMargin: number; // marge rond de auto-box als fractie van de boxmaat
 }
 
+export type MatteProvider = "fal-birefnet" | "fal-rmbg" | "api4ai";
+
 export interface MatteConfig {
   /**
    * Instance-matte (fase 0): SAM2 met de auto-box als prompt levert een
@@ -59,6 +61,9 @@ export interface MatteConfig {
   enabled: boolean;
   dilateRadius: number; // bescherming van dunne delen tegen SAM2's grovere rand
   featherSigma: number;
+  /** Basis-matte-model; de SAM2-combine en box-begrenzing blijven gelijk. */
+  provider: MatteProvider;
+  rmbgModelId: string; // fal-ai/bria/background/remove (RMBG 2.0)
 }
 
 export interface WindowsConfig {
@@ -230,6 +235,11 @@ export const defaultConfig: Config = {
     enabled: true,
     dilateRadius: 4,
     featherSigma: 2,
+    // A/B op ARV/RV/RVV (2026-07-23): RMBG 2.0 geeft vollere, rondere
+    // bandonderkanten (BiRefNet plat de band bij RV licht af) bij even
+    // scherpe spaken; geen halo's in beide. Daarom default rmbg.
+    provider: "fal-rmbg",
+    rmbgModelId: "fal-ai/bria/background/remove",
   },
   AI: {
     enabled: true,

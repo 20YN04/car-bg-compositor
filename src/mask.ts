@@ -5,7 +5,7 @@ import path from "node:path";
 import { fal } from "@fal-ai/client";
 import sharp from "sharp";
 import type { BBox } from "./bbox.js";
-import type { DetectConfig, FalConfig } from "./config.js";
+import type { DetectConfig, FalConfig, MatteConfig, MatteProvider } from "./config.js";
 
 export interface MaskStats {
   apiCalls: number;
@@ -127,19 +127,28 @@ export function ensureFalKey(): void {
 }
 
 /**
- * Haalt de cutout (PNG met alfakanaal) op via fal.ai BiRefNet, gecachet op
- * sha256 van de input-bytes zodat herhaald draaien nooit opnieuw de API
- * aanroept.
+ * Haalt de cutout (PNG met alfakanaal) op via het geconfigureerde
+ * matte-model (BiRefNet of BRIA RMBG 2.0), gecachet op sha256 van de
+ * input-bytes — per provider een eigen cache-entry, zodat herhaald draaien
+ * nooit opnieuw de API aanroept.
  */
 export async function getCutout(
   inputPath: string,
   cacheDir: string,
   falCfg: FalConfig,
+  matteCfg: MatteConfig,
   useCache: boolean,
 ): Promise<Buffer> {
+  const provider: MatteProvider = matteCfg.provider;
+  if (provider === "api4ai") {
+    throw new Error(
+      "MATTE.provider 'api4ai' is nog niet geïmplementeerd (stap B — alleen als fal-rmbg onvoldoende blijkt)",
+    );
+  }
   const inputBytes = await readFile(inputPath);
   const hash = createHash("sha256").update(inputBytes).digest("hex");
-  const cachePath = path.join(cacheDir, `${hash}.png`);
+  const suffix = provider === "fal-rmbg" ? ".rmbg.png" : ".png";
+  const cachePath = path.join(cacheDir, `${hash}${suffix}`);
 
   if (useCache && existsSync(cachePath)) {
     maskStats.cacheHits++;
@@ -152,21 +161,26 @@ export async function getCutout(
   });
   const imageUrl = await fal.storage.upload(file);
 
-  const result = await fal.subscribe(falCfg.modelId, {
-    input: {
-      image_url: imageUrl,
-      model: falCfg.model,
-      operating_resolution: falCfg.operatingResolution,
-      output_format: falCfg.outputFormat,
-      refine_foreground: falCfg.refineForeground,
-    },
-  });
+  const result =
+    provider === "fal-rmbg"
+      ? await fal.subscribe(matteCfg.rmbgModelId, {
+          input: { image_url: imageUrl },
+        })
+      : await fal.subscribe(falCfg.modelId, {
+          input: {
+            image_url: imageUrl,
+            model: falCfg.model,
+            operating_resolution: falCfg.operatingResolution,
+            output_format: falCfg.outputFormat,
+            refine_foreground: falCfg.refineForeground,
+          },
+        });
   maskStats.apiCalls++;
 
   const data = result.data as { image?: { url?: string } };
   if (!data.image?.url) {
     throw new Error(
-      `BiRefNet gaf geen image terug: ${JSON.stringify(result.data).slice(0, 300)}`,
+      `${provider} gaf geen image terug: ${JSON.stringify(result.data).slice(0, 300)}`,
     );
   }
   const response = await fetch(data.image.url);

@@ -81,6 +81,7 @@ function parseCli(): { cfg: Config; cli: CliOptions } {
       "no-detect": { type: "boolean", default: false },
       "no-windows": { type: "boolean", default: false },
       "no-harmonize": { type: "boolean", default: false },
+      matte: { type: "string" },
       plate: { type: "string" },
       preset: { type: "string" },
     },
@@ -99,6 +100,12 @@ function parseCli(): { cfg: Config; cli: CliOptions } {
   }
   if (values["no-windows"]) cfg.WINDOWS.enabled = false;
   if (values["no-harmonize"]) cfg.HARMONIZE.enabled = false;
+  if (values.matte !== undefined) {
+    if (!["fal-birefnet", "fal-rmbg", "api4ai"].includes(values.matte)) {
+      throw new Error("--matte moet fal-birefnet, fal-rmbg of api4ai zijn");
+    }
+    cfg.MATTE.provider = values.matte as Config["MATTE"]["provider"];
+  }
   if (values.preset !== undefined && !(values.preset in cfg.PRESETS)) {
     throw new Error("--preset moet side, front34 of rear34 zijn");
   }
@@ -230,7 +237,7 @@ async function processImage(
     ? await getCarBox(inputPath, CACHE_DIR, cfg.DETECT, cli.useCache)
     : null;
 
-  const cutout = await getCutout(inputPath, CACHE_DIR, cfg.FAL, cli.useCache);
+  const cutout = await getCutout(inputPath, CACHE_DIR, cfg.FAL, cfg.MATTE, cli.useCache);
 
   const { data, info } = await sharp(cutout)
     .ensureAlpha()
@@ -511,11 +518,12 @@ async function processImage(
     await writeDebugOutput(
       file, inputPath, alpha, width, height, analysis, placement, warnings, cfg,
       {
+        matteProvider: cfg.MATTE.provider,
         maskImpl: matteApplied
-          ? "birefnet+sam2+carbox"
+          ? `${cfg.MATTE.provider}+sam2+carbox`
           : detection
-            ? "birefnet+carbox"
-            : "birefnet",
+            ? `${cfg.MATTE.provider}+carbox`
+            : cfg.MATTE.provider,
         detectConfidence: detection ? Number(detection.confidence.toFixed(4)) : null,
         carBox: detection?.box ?? null,
         outsideBoxRemoved,
