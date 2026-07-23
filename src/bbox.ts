@@ -420,7 +420,7 @@ export function computeWheelGroundLine(
   const bboxHeight = bbox.bottom - bbox.top + 1;
   const bboxWidth = bbox.right - bbox.left + 1;
   const tolerance = Math.max(3, Math.round(bboxHeight * 0.01));
-  const minPlateauWidth = Math.max(4, Math.round(bboxWidth * 0.04));
+  const minPlateauWidth = Math.max(4, Math.round(bboxWidth * 0.03));
 
   const scanBottom = Math.min(bbox.bottom, adjustedBottom);
   const bottoms: number[] = [];
@@ -524,12 +524,32 @@ export function computeWheelGroundLine(
     return { groundLine: percentileGroundLine, clusters: [], fallback: true };
   }
   const groundLine = Math.max(...plateaus.map((c) => c.y));
-  // alleen plateaus nabij grondniveau zijn wielcontact; de band is ruim
-  // genoeg voor het verre wiel in een 3/4-view (dat hoger in beeld staat en
-  // zijn contactschaduw op zijn eigen niveau krijgt), maar sluit
-  // onderbodem/sideskirt-plateaus uit
+
+  // wielcontact-clusters: nabij de grondlijn, óf een lokaal minimum van de
+  // ondercontour (het verre wiel in een sterke 3/4-view staat door
+  // perspectief tot ~25% boven de grondlijn maar steekt wél omlaag t.o.v.
+  // zijn buren — de onderbodem juist niet en blijft zo buiten beeld)
   const groundBand = Math.max(6, Math.round(bboxHeight * 0.05));
-  const clusters = plateaus.filter((c) => c.y >= groundLine - groundBand);
+  const minProtrusion = Math.max(4, Math.round(bboxHeight * 0.02));
+  const neighborRef = (from: number, to: number): number | null => {
+    const vals: number[] = [];
+    for (let c = Math.max(0, from); c <= Math.min(bottoms.length - 1, to); c++) {
+      if (bottoms[c]! >= 0) vals.push(bottoms[c]!);
+    }
+    if (vals.length === 0) return null;
+    vals.sort((a, b) => a - b);
+    return percentileOf(vals, 0.5);
+  };
+  const clusters = plateaus.filter((c) => {
+    if (c.y >= groundLine - groundBand) return true;
+    const i0 = c.x0 - bbox.left;
+    const i1 = c.x1 - bbox.left;
+    const left = neighborRef(i0 - 12, i0 - 3);
+    const right = neighborRef(i1 + 3, i1 + 12);
+    const deeperThanLeft = left === null || c.y >= left + minProtrusion;
+    const deeperThanRight = right === null || c.y >= right + minProtrusion;
+    return deeperThanLeft && deeperThanRight && (left !== null || right !== null);
+  });
   return { groundLine, clusters, fallback: false };
 }
 

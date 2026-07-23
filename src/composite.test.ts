@@ -155,10 +155,13 @@ describe("computePlacement", () => {
       p,
       defaultConfig,
     );
-    // het nabije wiel (y = grondlijn) landt exact op GROUND_Y
-    expect(shadows[0]!.cy).toBeCloseTo(GROUND_Y + defaultConfig.SHADOW.offsetY);
+    // het nabije wiel (y = grondlijn) landt op GROUND_Y + de poel-offset
+    const poolOffset = defaultConfig.SHADOW.height * 0.3 * 0.4;
+    expect(shadows[0]!.cy).toBeCloseTo(
+      GROUND_Y + defaultConfig.SHADOW.offsetY + poolOffset,
+    );
     // het verre wiel krijgt zijn schaduw hoger, met precies de geschaalde afstand
-    expect(GROUND_Y - shadows[1]!.cy + defaultConfig.SHADOW.offsetY).toBeCloseTo(6 * p.scale);
+    expect(shadows[0]!.cy - shadows[1]!.cy).toBeCloseTo(6 * p.scale);
   });
 
   it("berekent de vloerreflectie-geometrie vanaf de contactlijn", () => {

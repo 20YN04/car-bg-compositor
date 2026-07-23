@@ -170,7 +170,7 @@ export const defaultConfig: Config = {
   ERODE_MASK: false,
   MASK_CLEAN: {
     enabled: true,
-    openRadiusRatio: 0.004, // ~8px bij 2048 breed: dunner dan ~16px verdwijnt
+    openRadiusRatio: 0.003, // ~6px bij 2048: windmolen weg, antenne blijft heel
     minRadius: 2,
     maxRadius: 12,
   },
@@ -241,8 +241,9 @@ export const defaultConfig: Config = {
       carWidthMeters: 4.4,
       lightDirX: -0.35, // plate is links het lichtst
       lightSoftness: 1.2,
-      floorReflectivity: 0.16,
-      reflectionHeightRatio: 0.35,
+      floorReflectivity: 0.12,
+      reflectionHeightRatio: 0.18, // subtiel en snel uitgefaded
+
     },
   },
   // neutrale gradient: geen perspectief, dus de klassieke plaatsing

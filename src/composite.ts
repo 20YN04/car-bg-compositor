@@ -83,14 +83,18 @@ export function buildContactShadows(
   return clusters.map((c) => {
     const centerX = (c.x0 + c.x1) / 2;
     const clusterWidth = (c.x1 - c.x0 + 1) * placement.scale;
+    const ry = cfg.SHADOW.height * 0.3;
     return {
       cx: placement.x + (centerX - bbox.left) * placement.scale,
+      // iets onder het contactpunt zodat de donkere poel zichtbaar blijft
+      // onder de band in plaats van erachter te verdwijnen
       cy:
         placement.y +
         (c.y - bbox.top + 1) * placement.scale +
-        cfg.SHADOW.offsetY,
-      rx: (clusterWidth / 2) * 1.4,
-      ry: cfg.SHADOW.height * 0.25,
+        cfg.SHADOW.offsetY +
+        ry * 0.4,
+      rx: (clusterWidth / 2) * 1.6,
+      ry,
     };
   });
 }
@@ -133,7 +137,7 @@ function contactShadowSvg(
   const lightShift = -profile.lightDirX;
   // strakker en donkerder dan de ambient: dit verankert de band visueel op
   // de vloer en vangt de zachte maskertaper bij het contactpunt op
-  const opacity = Math.min(0.62, s.opacity * 1.3);
+  const opacity = Math.min(0.7, s.opacity * 1.5);
   const shapes = contacts
     .map(
       (c) =>
@@ -212,7 +216,7 @@ export async function compositeImage(
   const contactShadow =
     contacts.length > 0
       ? await sharp(contactShadowSvg(canvas, cfg, contacts, input.profile))
-          .blur(Math.max(3, cfg.SHADOW.blur * 0.4))
+          .blur(Math.max(3, cfg.SHADOW.blur * 0.3))
           .png()
           .toBuffer()
       : null;
