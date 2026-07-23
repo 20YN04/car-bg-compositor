@@ -696,6 +696,69 @@ export function cleanAlpha(
   return { alpha: out, removedArea };
 }
 
+/**
+ * Instance-matte: begrens het BiRefNet-alfa met een (gedilateerd en
+ * gefeatherd) SAM2-instancemasker via per-pixel minimum. BiRefNet levert de
+ * zachte matting-randen, SAM2 bepaalt wat "auto" is — de aangesmolten
+ * grondschaduw ligt buiten het instancemasker en verdwijnt zo bij de bron.
+ * De dilatatie beschermt dunne delen (spiegels, antennes) tegen SAM2's
+ * grovere rand. Retourneert ook het aantal weggenomen pixels.
+ */
+export function applyInstanceMatte(
+  alpha: Uint8Array,
+  instanceMask: Uint8Array, // 0..255, zelfde afmetingen (al gefeatherd)
+  width: number,
+  height: number,
+  threshold: number,
+): { alpha: Uint8Array; removedArea: number } {
+  const out = new Uint8Array(alpha.length);
+  let removedArea = 0;
+  for (let i = 0; i < alpha.length; i++) {
+    const a = alpha[i] ?? 0;
+    const m = instanceMask[i] ?? 0;
+    out[i] = Math.min(a, m);
+    if (a > threshold && out[i]! <= threshold) removedArea++;
+  }
+  return { alpha: out, removedArea };
+}
+
+/**
+ * Binaire dilatatie met straal r. Groeit omhoog en zijwaarts (bescherming
+ * van dunne delen zoals spiegels en antennes tegen SAM2's grovere rand),
+ * maar bewust níet omlaag: de onderrand — het wielcontact — moet de strakke
+ * SAM2-rand houden, anders komt de aangesmolten contactschaduw terug.
+ */
+export function dilateMask(
+  mask: Uint8Array,
+  width: number,
+  height: number,
+  radius: number,
+): Uint8Array {
+  let bin: Uint8Array = new Uint8Array(mask.length);
+  for (let i = 0; i < mask.length; i++) bin[i] = (mask[i] ?? 0) > 127 ? 1 : 0;
+  for (let r = 0; r < radius; r++) {
+    const next = new Uint8Array(bin.length);
+    for (let y = 0; y < height; y++) {
+      const row = y * width;
+      for (let x = 0; x < width; x++) {
+        const i = row + x;
+        if (
+          bin[i] ||
+          (x > 0 && bin[i - 1]) ||
+          (x < width - 1 && bin[i + 1]) ||
+          (y < height - 1 && bin[i + width]) // van onder → groeit omhoog
+        ) {
+          next[i] = 1;
+        }
+      }
+    }
+    bin = next;
+  }
+  const out = new Uint8Array(mask.length);
+  for (let i = 0; i < mask.length; i++) out[i] = bin[i] ? 255 : 0;
+  return out;
+}
+
 /** 1px erosie (3×3 min-filter) van het alfakanaal, tegen kleurhalo's. */
 export function erodeAlpha(
   alpha: Uint8Array,

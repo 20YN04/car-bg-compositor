@@ -49,6 +49,18 @@ export interface DetectConfig {
   boxMargin: number; // marge rond de auto-box als fractie van de boxmaat
 }
 
+export interface MatteConfig {
+  /**
+   * Instance-matte (fase 0): SAM2 met de auto-box als prompt levert een
+   * instancemasker dat per definitie geen grondschaduw bevat; het BiRefNet-
+   * alfa wordt ermee begrensd (per-pixel min). BiRefNet houdt de zachte
+   * randen, SAM2 maakt de wielranden scherp.
+   */
+  enabled: boolean;
+  dilateRadius: number; // bescherming van dunne delen tegen SAM2's grovere rand
+  featherSigma: number;
+}
+
 export interface WindowsConfig {
   /**
    * Ruiten donker tinten: door de ramen blijft anders de oorspronkelijke
@@ -102,6 +114,7 @@ export interface Config {
   QA: QAConfig;
   FAL: FalConfig;
   DETECT: DetectConfig;
+  MATTE: MatteConfig;
   AI: AiConfig;
   PLATE: PlateConfig;
   WINDOWS: WindowsConfig;
@@ -159,6 +172,11 @@ export const defaultConfig: Config = {
     prompt: "car",
     minConfidence: 0.05,
     boxMargin: 0.02,
+  },
+  MATTE: {
+    enabled: true,
+    dilateRadius: 4,
+    featherSigma: 2,
   },
   AI: {
     enabled: true,

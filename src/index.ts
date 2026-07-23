@@ -6,7 +6,9 @@ import { parseArgs } from "node:util";
 import sharp from "sharp";
 import {
   analyzeAlpha,
+  applyInstanceMatte,
   cleanAlpha,
+  dilateMask,
   erodeAlpha,
   restrictAlphaToBox,
   trimAlphaBelow,
@@ -198,6 +200,7 @@ async function processImage(
   cli: CliOptions,
 ): Promise<ImageResult> {
   const inputPath = path.join(IN_DIR, file);
+  const inputBytes = await readFile(inputPath);
 
   const useDetect = cfg.DETECT.enabled && cli.detect;
   const detection = useDetect
@@ -214,6 +217,52 @@ async function processImage(
 
   let alpha: Uint8Array = new Uint8Array(width * height);
   for (let i = 0; i < alpha.length; i++) alpha[i] = data[i * 4 + 3] ?? 0;
+
+  // fase 0 — instance-matte: BiRefNet-alfa begrenzen met het SAM2-
+  // instancemasker (auto-box als prompt); de aangesmolten grondschaduw ligt
+  // buiten dat masker en verdwijnt zo bij de bron
+  let matteRemoved = 0;
+  if (cfg.MATTE.enabled && cli.ai && detection) {
+    try {
+      const b = detection.box;
+      const maskPng = await segmentByBoxes(
+        inputBytes,
+        [{ x: b.left, y: b.top, w: b.right - b.left + 1, h: b.bottom - b.top + 1 }],
+        cfg.WINDOWS.segmentModelId, CACHE_DIR, cli.useCache,
+      );
+      const raw = await sharp(maskPng)
+        .resize(width, height, { fit: "fill" })
+        .greyscale()
+        .raw()
+        .toBuffer();
+      let mask: Uint8Array = dilateMask(
+        new Uint8Array(raw.buffer, raw.byteOffset, width * height),
+        width, height, cfg.MATTE.dilateRadius,
+      );
+      if (cfg.MATTE.featherSigma > 0) {
+        // let op: zonder expliciet 1-kanaals doel promoveert sharp de blur
+        // naar 3 kanalen en verschuiven de maskbytes
+        const { data: feathered, info: fInfo } = await sharp(Buffer.from(mask), {
+          raw: { width, height, channels: 1 },
+        })
+          .blur(cfg.MATTE.featherSigma)
+          .toColourspace("b-w")
+          .raw()
+          .toBuffer({ resolveWithObject: true });
+        if (fInfo.channels !== 1) {
+          throw new Error(`feather gaf ${fInfo.channels} kanalen`);
+        }
+        mask = new Uint8Array(feathered.buffer, feathered.byteOffset, width * height);
+      }
+      const matted = applyInstanceMatte(alpha, mask, width, height, cfg.ALPHA_THRESHOLD);
+      alpha = matted.alpha;
+      matteRemoved = matted.removedArea;
+    } catch (err) {
+      console.warn(
+        `  ⚠ ${file}: instance-matte overgeslagen: ${err instanceof Error ? err.message : err}`,
+      );
+    }
+  }
 
   // instance-aware masking (implementatie B): masker begrenzen tot de auto-box
   let outsideBoxRemoved = 0;
@@ -274,7 +323,7 @@ async function processImage(
   const windowInfo = { boxes: 0, tintedPixels: 0 };
   if (cfg.WINDOWS.enabled && cli.ai && analysis.bbox) {
     try {
-      const inputBytes = await readFile(inputPath);
+
       const detectedWindows = await detectWindows(
         inputBytes, cfg.WINDOWS.detectPrompt, CACHE_DIR, cfg.AI, cli.useCache,
       );
@@ -315,7 +364,7 @@ async function processImage(
     analysis.bbox !== null &&
     placement !== null;
   if (plateEnabled && analysis.bbox && placement) {
-    const inputBytes = await readFile(inputPath);
+
     const detected = await detectPlates(inputBytes, CACHE_DIR, cfg.AI, cli.useCache);
     plates = computePlateRegions(
       detected, alpha, width, height, analysis.bbox, placement,
@@ -389,6 +438,7 @@ async function processImage(
         detectConfidence: detection ? Number(detection.confidence.toFixed(4)) : null,
         carBox: detection?.box ?? null,
         outsideBoxRemoved,
+        matteRemoved,
         plates: plates.length,
         plateStatus,
         contactClusters: analysis.contactClusters.length,
