@@ -49,6 +49,22 @@ export interface DetectConfig {
   boxMargin: number; // marge rond de auto-box als fractie van de boxmaat
 }
 
+export interface WindowsConfig {
+  /**
+   * Ruiten donker tinten: door de ramen blijft anders de oorspronkelijke
+   * omgeving zichtbaar (bomen, hek), wat vloekt met de nieuwe achtergrond.
+   * Detectie (Florence-2) + segmentatie (SAM2 met box-prompts) leveren een
+   * raammasker; die pixels worden wiskundig richting tintColor verdonkerd —
+   * reflecties blijven subtiel zichtbaar, geen generatieve bewerking.
+   */
+  enabled: boolean;
+  detectPrompt: string;
+  segmentModelId: string;
+  tintOpacity: number; // 0..1: hoe sterk richting tintColor
+  tintColor: { r: number; g: number; b: number };
+  featherSigma: number; // blur op de maskrand voor een zachte overgang
+}
+
 export type PlateMode = "blur" | "replace" | "off";
 
 export interface PlateConfig {
@@ -70,6 +86,7 @@ export interface AiConfig {
   vlmModelId: string; // visual question answering voor AI-kwaliteitscontrole
   costPerDetection: number;
   costPerQuery: number;
+  costPerSegment: number;
 }
 
 export interface Config {
@@ -87,6 +104,7 @@ export interface Config {
   DETECT: DetectConfig;
   AI: AiConfig;
   PLATE: PlateConfig;
+  WINDOWS: WindowsConfig;
   COST_PER_CALL_USD: number;
   MONTHLY_VOLUME: number; // verwacht beeldvolume voor de kostenextrapolatie
 }
@@ -150,11 +168,20 @@ export const defaultConfig: Config = {
     // ijken op het fal-dashboard
     costPerDetection: 0.001,
     costPerQuery: 0.001,
+    costPerSegment: 0.002,
   },
   PLATE: {
     mode: "blur",
     blurSigma: 12,
     style: "gaussian",
+  },
+  WINDOWS: {
+    enabled: true,
+    detectPrompt: "car window",
+    segmentModelId: "fal-ai/sam2/image",
+    tintOpacity: 0.8,
+    tintColor: { r: 20, g: 24, b: 28 },
+    featherSigma: 3,
   },
   /**
    * SCHATTING — de prijs per BiRefNet-call staat niet in de publieke docs.

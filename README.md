@@ -34,6 +34,7 @@ pnpm start --no-debug               # sla debug-output over
 pnpm start --no-ai                  # sla plaat-anonimisatie + AI-checks over
 pnpm start --no-detect              # sla auto-detectie over (onbegrensd masker)
 pnpm start --plate replace          # plaat vervangen i.p.v. blurren (of: off)
+pnpm start --no-windows             # ruiten niet donker tinten
 ```
 
 Resultaten komen in `./out/` (JPEG). Per beeld verschijnt in `./debug/` het
@@ -62,6 +63,7 @@ draaien (bijv. tijdens het tunen van de compositing) kost geen API-credits.
 | `DETECT` | instance-aware masking: Florence-2 detecteert de auto en het masker wordt tot die box begrensd (weert slagschaduw op de grond en aangeplakte achtergrondobjecten). `minConfidence` werkt op een heuristische score (oppervlak × centraliteit) — Florence geeft zelf geen confidence |
 | `PLATE` | nummerplaat-anonimisatie: `blur` (default, GDPR), `replace` (plaat met `AI.plateText` of `overlayPath`), `off`; `style` gaussian of mosaic |
 | `AI` | plaatdetectie (Florence-2) en AI-kwaliteitscontroles via een vision-model (masker compleet? auto op de grond?) |
+| `WINDOWS` | ruiten donker tinten (Florence-2-detectie + SAM2-masker + wiskundige verdonkering) zodat de oorspronkelijke omgeving niet door het glas zichtbaar blijft; `tintOpacity`/`tintColor`/`featherSigma` bepalen de look |
 | `MONTHLY_VOLUME` | beeldvolume voor de kostenextrapolatie (default 75.000) |
 | `COST_PER_CALL_USD` | prijs per API-call voor de kostenschatting — ijken op het fal-dashboard |
 

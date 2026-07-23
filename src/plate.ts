@@ -32,7 +32,12 @@ export function computePlateRegions(
   canvas: CanvasSize,
   alphaThreshold: number,
 ): CanvasRect[] {
+  const carArea = (bbox.right - bbox.left + 1) * (bbox.bottom - bbox.top + 1);
+  const carWidth = bbox.right - bbox.left + 1;
   return detected
+    // Florence plakt de prompt bij afwezigheid van een plaat soms op de hele
+    // auto; een echte plaat beslaat maar een fractie van het autosilhouet
+    .filter((p) => p.w * p.h <= 0.04 * carArea && p.w <= 0.35 * carWidth)
     .filter((p) => {
       const cx = Math.round(p.x + p.w / 2);
       const cy = Math.round(p.y + p.h / 2);

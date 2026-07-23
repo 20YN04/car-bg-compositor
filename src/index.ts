@@ -19,7 +19,8 @@ import {
   type Placement,
 } from "./composite.js";
 import { defaultConfig, type Config } from "./config.js";
-import { aiStats, detectPlates, visualYesNo } from "./ai.js";
+import { aiStats, detectPlates, detectWindows, segmentByBoxes, visualYesNo } from "./ai.js";
+import { applyWindowTint, filterBoxesOnCar, filterPlausibleWindowBoxes } from "./windows.js";
 import { getCarBox, getCutout, maskStats } from "./mask.js";
 import { buildContactShadows, type CanvasRect } from "./composite.js";
 import { anonymizePlates, computePlateRegions, type PlateStatus } from "./plate.js";
@@ -63,6 +64,7 @@ function parseCli(): { cfg: Config; cli: CliOptions } {
       "no-debug": { type: "boolean", default: false },
       "no-ai": { type: "boolean", default: false },
       "no-detect": { type: "boolean", default: false },
+      "no-windows": { type: "boolean", default: false },
       plate: { type: "string" },
     },
   });
@@ -78,6 +80,7 @@ function parseCli(): { cfg: Config; cli: CliOptions } {
       throw new Error("--car-width moet tussen 0 en 1 liggen");
     }
   }
+  if (values["no-windows"]) cfg.WINDOWS.enabled = false;
   if (values.plate !== undefined) {
     if (!["blur", "replace", "off"].includes(values.plate)) {
       throw new Error("--plate moet blur, replace of off zijn");
@@ -255,6 +258,44 @@ async function processImage(
       cfg.CAR_WIDTH_RATIO,
     );
   }
+  // ruiten donker tinten zodat de oorspronkelijke omgeving niet door het
+  // glas zichtbaar blijft (detectie + SAM2-masker + wiskundige verdonkering)
+  const windowInfo = { boxes: 0, tintedPixels: 0 };
+  if (cfg.WINDOWS.enabled && cli.ai && analysis.bbox) {
+    try {
+      const inputBytes = await readFile(inputPath);
+      const detectedWindows = await detectWindows(
+        inputBytes, cfg.WINDOWS.detectPrompt, CACHE_DIR, cfg.AI, cli.useCache,
+      );
+      const onCar = filterBoxesOnCar(
+        filterPlausibleWindowBoxes(detectedWindows, analysis.bbox),
+        alpha, width, height, cfg.ALPHA_THRESHOLD,
+      );
+      windowInfo.boxes = onCar.length;
+      if (onCar.length > 0) {
+        const maskPng = await segmentByBoxes(
+          inputBytes, onCar, cfg.WINDOWS.segmentModelId, CACHE_DIR, cli.useCache,
+        );
+        const maskRaw = await sharp(maskPng)
+          .resize(width, height, { fit: "fill" })
+          .greyscale()
+          .blur(cfg.WINDOWS.featherSigma)
+          .raw()
+          .toBuffer();
+        windowInfo.tintedPixels = applyWindowTint(
+          data, alpha,
+          new Uint8Array(maskRaw.buffer, maskRaw.byteOffset, width * height),
+          width, height, cfg.WINDOWS,
+        );
+      }
+    } catch (err) {
+      // tint is cosmetisch: een falende segmentatie mag het beeld niet blokkeren
+      console.warn(
+        `  ⚠ ${file}: ruit-tint overgeslagen: ${err instanceof Error ? err.message : err}`,
+      );
+    }
+  }
+
   // nummerplaten detecteren en mappen naar canvascoördinaten
   let plates: CanvasRect[] = [];
   const plateEnabled =
@@ -345,6 +386,7 @@ async function processImage(
         plates: plates.length,
         plateStatus,
         contactClusters: contactClusterCount,
+        windows: windowInfo,
       },
     );
   }
@@ -369,6 +411,7 @@ function printSummary(results: ImageResult[], cfg: Config): void {
   console.log(`auto-detect: ${maskStats.detectCalls} calls, ${maskStats.detectCacheHits} cache-hits`);
   console.log(`plaatdetect: ${aiStats.detectCalls} calls, ${aiStats.detectCacheHits} cache-hits`);
   console.log(`AI-checks:   ${aiStats.vlmCalls} calls, ${aiStats.vlmCacheHits} cache-hits`);
+  console.log(`ruit-segm.:  ${aiStats.segmentCalls} calls, ${aiStats.segmentCacheHits} cache-hits`);
 
   const byCode = new Map<string, string[]>();
   for (const r of results) {
@@ -391,11 +434,13 @@ function printSummary(results: ImageResult[], cfg: Config): void {
     maskStats.apiCalls * cfg.COST_PER_CALL_USD +
     maskStats.detectCalls * cfg.AI.costPerDetection +
     aiStats.detectCalls * cfg.AI.costPerDetection +
-    aiStats.vlmCalls * cfg.AI.costPerQuery;
+    aiStats.vlmCalls * cfg.AI.costPerQuery +
+    aiStats.segmentCalls * cfg.AI.costPerSegment;
   const perImage =
     cfg.COST_PER_CALL_USD +
     (cfg.DETECT.enabled ? cfg.AI.costPerDetection : 0) +
-    (cfg.AI.enabled ? cfg.AI.costPerDetection + 2 * cfg.AI.costPerQuery : 0);
+    (cfg.AI.enabled ? cfg.AI.costPerDetection + 2 * cfg.AI.costPerQuery : 0) +
+    (cfg.WINDOWS.enabled ? cfg.AI.costPerDetection + cfg.AI.costPerSegment : 0);
   const monthly = cfg.MONTHLY_VOLUME * perImage;
   console.log(
     `\nkosten: $${runCost.toFixed(4)} deze run ` +

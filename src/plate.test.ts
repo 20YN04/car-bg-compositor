@@ -33,6 +33,14 @@ describe("computePlateRegions", () => {
     expect(r.y + r.height).toBeLessThanOrEqual(CANVAS.height);
   });
 
+  it("verwerpt een reuzebox (hele auto) als onplausibele plaat", () => {
+    const regions = computePlateRegions(
+      [{ x: 100, y: 200, w: 790, h: 390 }], // ≈ de volledige auto-bbox
+      alphaWithCar(), 1000, 700, bbox, placement, CANVAS, 10,
+    );
+    expect(regions).toHaveLength(0);
+  });
+
   it("verwerpt detecties die niet op de gemaskeerde auto liggen", () => {
     const regions = computePlateRegions(
       [{ x: 10, y: 10, w: 100, h: 24 }], // buiten het masker
