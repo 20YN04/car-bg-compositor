@@ -101,6 +101,23 @@ export interface AiConfig {
   costPerSegment: number;
 }
 
+export interface BackgroundProfile {
+  /**
+   * Kalibratie per achtergrond-plate (fase 1/2): plaatsing, schaal, licht en
+   * reflectie slaan op de werkelijke vloer van déze plate. Willekeurige
+   * plates werken niet — de camerahoogte/-hoek van de plate moet bij de
+   * auto-shots passen; een mismatch is een plate-keuzeprobleem, geen codebug.
+   */
+  horizonY: number | null; // canvas-y van de vloer/wandovergang (documentatie/QA)
+  contactTargetY: number; // canvas-y waar de wielcontactlijn moet landen
+  floorScaleRef: number; // px per meter op de contactdiepte van deze plate
+  carWidthMeters: number; // aangenomen zichtbare autobreedte/-lengte in meters
+  lightDirX: number; // -1..1, richting waaruit het licht komt (negatief = links)
+  lightSoftness: number; // multiplier op de schaduwblur
+  floorReflectivity: number; // 0..1 sterkte van de vloerreflectie
+  reflectionHeightRatio: number; // fractie van de autohoogte die meespiegelt
+}
+
 export interface Config {
   CANVAS: CanvasSize;
   GROUND_Y: number; // y-coördinaat waar de banden komen te staan
@@ -118,6 +135,8 @@ export interface Config {
   AI: AiConfig;
   PLATE: PlateConfig;
   WINDOWS: WindowsConfig;
+  BACKGROUND_PROFILES: Record<string, BackgroundProfile>; // key = bestandsnaam
+  DEFAULT_PROFILE: BackgroundProfile;
   COST_PER_CALL_USD: number;
   MONTHLY_VOLUME: number; // verwacht beeldvolume voor de kostenextrapolatie
 }
@@ -192,6 +211,30 @@ export const defaultConfig: Config = {
     mode: "blur",
     blurSigma: 12,
     style: "gaussian",
+  },
+  BACKGROUND_PROFILES: {
+    // gekalibreerd op de betonvloer-showroomplate (1440×938 → cover 1920×1440)
+    "showroom.jpg": {
+      horizonY: 867,
+      contactTargetY: 1150,
+      floorScaleRef: 780,
+      carWidthMeters: 1.8,
+      lightDirX: -0.35, // plate is links het lichtst
+      lightSoftness: 1.2,
+      floorReflectivity: 0.16,
+      reflectionHeightRatio: 0.35,
+    },
+  },
+  // neutrale gradient: geen perspectief, dus de klassieke plaatsing
+  DEFAULT_PROFILE: {
+    horizonY: null,
+    contactTargetY: 1200,
+    floorScaleRef: 875, // ≈ oude CAR_WIDTH_RATIO 0.82 bij 1.8 m
+    carWidthMeters: 1.8,
+    lightDirX: 0,
+    lightSoftness: 1,
+    floorReflectivity: 0.12,
+    reflectionHeightRatio: 0.3,
   },
   WINDOWS: {
     enabled: true,

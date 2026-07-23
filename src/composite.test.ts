@@ -9,6 +9,7 @@ import {
   buildContactShadows,
   compositeImage,
   computePlacement,
+  computeReflectionRect,
   generateDefaultBackground,
   mapRectToCanvas,
 } from "./composite.js";
@@ -96,7 +97,10 @@ describe("computePlacement", () => {
     await generateDefaultBackground(bgPath, cfg.CANVAS);
 
     const jpeg = await compositeImage(
-      { rgba, width: srcW, height: srcH, bbox, placement, backgroundPath: bgPath },
+      {
+        rgba, width: srcW, height: srcH, bbox, placement, backgroundPath: bgPath,
+        profile: cfg.DEFAULT_PROFILE, contactY: cfg.GROUND_Y,
+      },
       cfg,
     );
     const { data, info } = await sharp(jpeg)
@@ -155,6 +159,23 @@ describe("computePlacement", () => {
     expect(shadows[0]!.cy).toBeCloseTo(GROUND_Y + defaultConfig.SHADOW.offsetY);
     // het verre wiel krijgt zijn schaduw hoger, met precies de geschaalde afstand
     expect(GROUND_Y - shadows[1]!.cy + defaultConfig.SHADOW.offsetY).toBeCloseTo(6 * p.scale);
+  });
+
+  it("berekent de vloerreflectie-geometrie vanaf de contactlijn", () => {
+    const bbox: BBox = { left: 0, top: 0, right: 999, bottom: 499 };
+    const p = computePlacement(bbox, 499, CANVAS, GROUND_Y, RATIO);
+    const rect = computeReflectionRect(p, GROUND_Y, CANVAS, 0.35);
+    expect(rect).not.toBeNull();
+    expect(rect!.top).toBe(GROUND_Y);
+    // geklemd op de canvasonderrand
+    expect(rect!.height).toBe(Math.min(Math.round(p.height * 0.35), 1440 - GROUND_Y));
+    expect(rect!.left).toBe(Math.max(0, Math.round(p.x)));
+  });
+
+  it("geeft null wanneer er geen zichtbare reflectieruimte is", () => {
+    const bbox: BBox = { left: 0, top: 0, right: 999, bottom: 499 };
+    const p = computePlacement(bbox, 499, CANVAS, 1439, RATIO);
+    expect(computeReflectionRect(p, 1439, CANVAS, 0.35)).toBeNull();
   });
 
   it("respecteert een aangepaste CAR_WIDTH_RATIO", () => {

@@ -389,6 +389,9 @@ async function processImage(
     cfg,
   );
 
+  const profile =
+    cfg.BACKGROUND_PROFILES[path.basename(backgroundPath)] ?? cfg.DEFAULT_PROFILE;
+
   let outJpeg: Buffer | null = null;
   let plateStatus: PlateStatus = plateEnabled ? "none" : "off";
   if (analysis.bbox && placement) {
@@ -398,6 +401,8 @@ async function processImage(
         contactShadows: buildContactShadows(
           analysis.contactClusters, analysis.bbox, placement, cfg,
         ),
+        profile,
+        contactY: cfg.GROUND_Y,
       },
       cfg,
     );
@@ -446,6 +451,13 @@ async function processImage(
         groundTrimmedPx,
         groundFallback: analysis.groundFallback,
         windows: windowInfo,
+        profile: {
+          background: path.basename(backgroundPath),
+          contactTargetY: profile.contactTargetY,
+          floorScaleRef: profile.floorScaleRef,
+          lightDirX: profile.lightDirX,
+          floorReflectivity: profile.floorReflectivity,
+        },
       },
     );
   }

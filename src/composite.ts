@@ -1,6 +1,6 @@
 import sharp from "sharp";
 import type { BBox, ContactCluster } from "./bbox.js";
-import type { CanvasSize, Config } from "./config.js";
+import type { BackgroundProfile, CanvasSize, Config } from "./config.js";
 
 export interface Placement {
   scale: number;
@@ -101,9 +101,14 @@ function shadowSvg(
   groundY: number,
   cfg: Config,
   contacts: ShadowEllipse[],
+  profile: BackgroundProfile,
 ): Buffer {
   const s = cfg.SHADOW;
-  const cx = placement.x + placement.width / 2 + s.offsetX;
+  // schaduw verschuift van het licht weg: lichtDirX < 0 (licht van links)
+  // duwt de schaduw naar rechts
+  const lightShift = -profile.lightDirX;
+  const cx =
+    placement.x + placement.width / 2 + s.offsetX + lightShift * placement.width * 0.05;
   const cy = groundY + s.offsetY;
   const rx = (placement.width * s.widthRatio) / 2;
   const ry = s.height / 2;
@@ -115,12 +120,38 @@ function shadowSvg(
     `<ellipse cx="${cx}" cy="${cy}" rx="${rx}" ry="${ry}" fill="black" fill-opacity="${ambientOpacity}"/>`,
     ...contacts.map(
       (c) =>
-        `<ellipse cx="${c.cx}" cy="${c.cy}" rx="${c.rx}" ry="${c.ry}" fill="black" fill-opacity="${s.opacity}"/>`,
+        `<ellipse cx="${c.cx + lightShift * c.ry * 1.5}" cy="${c.cy}" rx="${c.rx}" ry="${c.ry}"` +
+        ` fill="black" fill-opacity="${s.opacity}"/>`,
     ),
   ].join("");
   return Buffer.from(
     `<svg width="${canvas.width}" height="${canvas.height}" xmlns="http://www.w3.org/2000/svg">${shapes}</svg>`,
   );
+}
+
+export interface ReflectionRect {
+  left: number; // positie op het canvas
+  top: number;
+  width: number;
+  height: number; // zichtbare (geklemde) hoogte
+}
+
+/** Geometrie van de vloerreflectie: gespiegeld vanaf de contactlijn omlaag. */
+export function computeReflectionRect(
+  placement: Placement,
+  contactY: number,
+  canvas: CanvasSize,
+  reflectionHeightRatio: number,
+): ReflectionRect | null {
+  const height = Math.round(placement.height * reflectionHeightRatio);
+  const left = Math.max(0, Math.round(placement.x));
+  const width = Math.min(
+    Math.round(placement.width),
+    canvas.width - left,
+  );
+  const visibleHeight = Math.min(height, canvas.height - contactY);
+  if (visibleHeight <= 2 || width <= 0) return null;
+  return { left, top: contactY, width, height: visibleHeight };
 }
 
 export interface CompositeInput {
@@ -131,6 +162,8 @@ export interface CompositeInput {
   placement: Placement;
   backgroundPath: string;
   contactShadows?: ShadowEllipse[]; // per wielcontact, uit buildContactShadows
+  profile: BackgroundProfile;
+  contactY: number; // canvas-y van de contactlijn (voor de vloerreflectie)
 }
 
 /**
@@ -151,9 +184,11 @@ export async function compositeImage(
     .toBuffer();
 
   const shadow = await sharp(
-    shadowSvg(canvas, placement, cfg.GROUND_Y, cfg, input.contactShadows ?? []),
+    shadowSvg(
+      canvas, placement, input.contactY, cfg, input.contactShadows ?? [], input.profile,
+    ),
   )
-    .blur(cfg.SHADOW.blur)
+    .blur(cfg.SHADOW.blur * input.profile.lightSoftness)
     .png()
     .toBuffer();
 
@@ -190,13 +225,37 @@ export async function compositeImage(
     top = Math.max(0, top);
   }
 
-  return sharp(background)
-    .composite([
-      { input: shadow, blend: "multiply" },
-      { input: car, left, top },
-    ])
-    .png()
-    .toBuffer();
+  const layers: sharp.OverlayOptions[] = [{ input: shadow, blend: "multiply" }];
+
+  // vloerreflectie: verticaal gespiegelde uitsnede onder de contactlijn met
+  // snelle opacity-fade — puur flip + gradientmasker + blur
+  const rect = computeReflectionRect(
+    placement, input.contactY, canvas, input.profile.reflectionHeightRatio,
+  );
+  if (rect && input.profile.floorReflectivity > 0.01) {
+    const meta = await sharp(car).metadata();
+    const cropW = Math.min(rect.width, meta.width ?? rect.width);
+    const cropH = Math.min(rect.height, meta.height ?? rect.height);
+    const gradient = Buffer.from(
+      `<svg width="${cropW}" height="${cropH}" xmlns="http://www.w3.org/2000/svg">` +
+        `<defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1">` +
+        `<stop offset="0" stop-color="white" stop-opacity="${input.profile.floorReflectivity}"/>` +
+        `<stop offset="1" stop-color="white" stop-opacity="0"/>` +
+        `</linearGradient></defs>` +
+        `<rect width="100%" height="100%" fill="url(#g)"/></svg>`,
+    );
+    const reflection = await sharp(car)
+      .flip()
+      .extract({ left: 0, top: 0, width: cropW, height: cropH })
+      .composite([{ input: gradient, blend: "dest-in" }])
+      .blur(2)
+      .png()
+      .toBuffer();
+    layers.push({ input: reflection, left, top: rect.top });
+  }
+
+  layers.push({ input: car, left, top });
+  return sharp(background).composite(layers).png().toBuffer();
 }
 
 /**
