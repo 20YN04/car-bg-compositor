@@ -3,7 +3,14 @@ import sharp from "sharp";
 import type { BBox } from "./bbox.js";
 import { computePlacement } from "./composite.js";
 import { defaultConfig } from "./config.js";
-import { anonymizePlates, computePlateRegions, fitPlateInRegion } from "./plate.js";
+import {
+  affinePlacementForQuad,
+  anonymizePlates,
+  computePlateRegions,
+  fitPlateInRegion,
+  inflateQuad,
+  plateQuadFromMask,
+} from "./plate.js";
 
 const CANVAS = { width: 1920, height: 1440 };
 
@@ -78,6 +85,87 @@ describe("fitPlateInRegion", () => {
   });
 });
 
+describe("plateQuadFromMask", () => {
+  const W = 400;
+  const H = 200;
+
+  /** Parallellogram-masker: linkerrand op y=[80,120], rechterrand op y=[60,100]. */
+  function slantedMask(): Uint8Array {
+    const mask = new Uint8Array(W * H);
+    for (let x = 100; x <= 300; x++) {
+      const t = (x - 100) / 200;
+      const top = Math.round(80 - 20 * t);
+      const bot = Math.round(120 - 20 * t);
+      for (let y = top; y <= bot; y++) mask[y * W + x] = 255;
+    }
+    return mask;
+  }
+
+  it("haalt een schuin plaatvlak uit het masker", () => {
+    const quad = plateQuadFromMask(slantedMask(), W, H, { x: 100, y: 60, w: 200, h: 60 });
+    expect(quad).not.toBeNull();
+    // linkerrand lager dan rechterrand (plaat helt omhoog naar rechts)
+    expect(quad!.tl.y).toBeGreaterThan(quad!.tr.y);
+    expect(quad!.bl.y).toBeGreaterThan(quad!.br.y);
+    // hoogte links ≈ hoogte rechts ≈ 40
+    expect(quad!.bl.y - quad!.tl.y).toBeCloseTo(40, 0);
+    expect(quad!.br.y - quad!.tr.y).toBeCloseTo(40, 0);
+  });
+
+  it("verwerpt een leeg of te smal masker", () => {
+    expect(plateQuadFromMask(new Uint8Array(W * H), W, H, { x: 100, y: 60, w: 200, h: 60 }))
+      .toBeNull();
+  });
+
+  it("verwerpt een niet-plaatachtige (te vierkante) segmentatie", () => {
+    const mask = new Uint8Array(W * H);
+    for (let x = 150; x <= 250; x++) {
+      for (let y = 20; y <= 180; y++) mask[y * W + x] = 255;
+    }
+    expect(plateQuadFromMask(mask, W, H, { x: 150, y: 20, w: 100, h: 160 })).toBeNull();
+  });
+});
+
+describe("affinePlacementForQuad", () => {
+  it("beeldt de badge-hoeken exact op het quad af", () => {
+    const quad = {
+      tl: { x: 10, y: 20 },
+      tr: { x: 110, y: 10 },
+      bl: { x: 12, y: 45 },
+      br: { x: 112, y: 35 },
+    };
+    const w = 100;
+    const h = 25;
+    const { matrix, left, top } = affinePlacementForQuad(quad, w, h);
+    const [a, b, c, d] = matrix;
+    // basisvectoren: (w,0) → tl→tr en (0,h) → tl→bl
+    expect(a * w + b * 0).toBeCloseTo(quad.tr.x - quad.tl.x, 5);
+    expect(c * w + d * 0).toBeCloseTo(quad.tr.y - quad.tl.y, 5);
+    // (0,h) → bl
+    expect(a * 0 + b * h).toBeCloseTo(quad.bl.x - quad.tl.x, 5);
+    expect(c * 0 + d * h).toBeCloseTo(quad.bl.y - quad.tl.y, 5);
+    // offset = bovenste/linkse hoek van het getransformeerde vlak
+    expect(left).toBe(10);
+    expect(top).toBe(10);
+  });
+});
+
+describe("inflateQuad", () => {
+  it("blaast uniform op rond het zwaartepunt", () => {
+    const q = {
+      tl: { x: 0, y: 0 },
+      tr: { x: 10, y: 0 },
+      bl: { x: 0, y: 4 },
+      br: { x: 10, y: 4 },
+    };
+    const grown = inflateQuad(q, 1.5);
+    expect(grown.tl.x).toBeCloseTo(-2.5);
+    expect(grown.br.x).toBeCloseTo(12.5);
+    expect(grown.tl.y).toBeCloseTo(-1);
+    expect(grown.br.y).toBeCloseTo(5);
+  });
+});
+
 describe("anonymizePlates", () => {
   const canvas = { width: 200, height: 100 };
   const region = { x: 60, y: 40, width: 80, height: 20 };
@@ -102,7 +190,7 @@ describe("anonymizePlates", () => {
   it("mode off laat het beeld ongemoeid", async () => {
     const img = await testImage();
     const { image, status } = await anonymizePlates(
-      img, [region], canvas, { ...defaultConfig.PLATE, mode: "off" }, "CARREDO",
+      img, [{ region }], canvas, { ...defaultConfig.PLATE, mode: "off" }, "CARREDO",
     );
     expect(status).toBe("off");
     expect(image).toBe(img);
@@ -111,7 +199,7 @@ describe("anonymizePlates", () => {
   it("mode blur wijzigt de regio maar niet de omgeving", async () => {
     const img = await testImage();
     const { image, status } = await anonymizePlates(
-      img, [region], canvas, { ...defaultConfig.PLATE, mode: "blur" }, "CARREDO",
+      img, [{ region }], canvas, { ...defaultConfig.PLATE, mode: "blur" }, "CARREDO",
     );
     expect(status).toBe("blurred");
     // binnen de regio: de harde zwart-op-geel tekst is uitgesmeerd
@@ -125,7 +213,7 @@ describe("anonymizePlates", () => {
   it("mode replace legt een donkere CARREDO-badge over de regio", async () => {
     const img = await testImage();
     const { image, status } = await anonymizePlates(
-      img, [region], canvas, { ...defaultConfig.PLATE, mode: "replace" }, "X",
+      img, [{ region }], canvas, { ...defaultConfig.PLATE, mode: "replace" }, "X",
     );
     expect(status).toBe("replaced");
     // plaatmidden: wit wordmark ("X") op de badge

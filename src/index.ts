@@ -34,7 +34,15 @@ import {
 import { applyWindowTint, filterBoxesOnCar, filterPlausibleWindowBoxes } from "./windows.js";
 import { getCarBox, getCutout, maskStats } from "./mask.js";
 import { buildContactShadows, type CanvasRect } from "./composite.js";
-import { anonymizePlates, computePlateRegions, type PlateStatus } from "./plate.js";
+import {
+  anonymizePlates,
+  computePlateRegions,
+  plateQuadFromMask,
+  plausiblePlatesOnCar,
+  type PlateQuad,
+  type PlateStatus,
+  type PlateTarget,
+} from "./plate.js";
 import { backgroundMeans, cutoutMeans, harmonizeColors } from "./harmonize.js";
 import { applyBranding } from "./branding.js";
 import { runQA, type QAWarning } from "./qa.js";
@@ -414,6 +422,7 @@ async function processImage(
 
   // nummerplaten detecteren en mappen naar canvascoördinaten
   let plates: CanvasRect[] = [];
+  let plateTargets: PlateTarget[] = [];
   const plateEnabled =
     cfg.PLATE.mode !== "off" &&
     cli.ai &&
@@ -426,6 +435,48 @@ async function processImage(
       detected, alpha, width, height, analysis.bbox, placement,
       cfg.CANVAS, cfg.ALPHA_THRESHOLD,
     );
+    // plaatvlak (quad) per plaat via SAM2: de badge kan dan met een affine
+    // warp het bumperperspectief volgen i.p.v. als rechte sticker te hangen
+    const srcPlates = plausiblePlatesOnCar(
+      detected, alpha, width, height, analysis.bbox, cfg.ALPHA_THRESHOLD,
+    );
+    const bb = analysis.bbox;
+    const pl = placement;
+    const toCanvas = (p: { x: number; y: number }) => ({
+      x: pl.x + (p.x - bb.left) * pl.scale,
+      y: pl.y + (p.y - bb.top) * pl.scale,
+    });
+    plateTargets = plates.map((region) => ({ region }));
+    for (let i = 0; i < srcPlates.length && i < plateTargets.length; i++) {
+      const src = srcPlates[i]!;
+      try {
+        const maskPng = await segmentByBoxes(
+          inputBytes, [src], cfg.WINDOWS.segmentModelId, CACHE_DIR, cli.useCache,
+        );
+        const raw = await sharp(maskPng)
+          .resize(width, height, { fit: "fill" })
+          .greyscale()
+          .raw()
+          .toBuffer();
+        const quad = plateQuadFromMask(
+          new Uint8Array(raw.buffer, raw.byteOffset, width * height),
+          width, height, src,
+        );
+        if (quad) {
+          plateTargets[i]!.quad = {
+            tl: toCanvas(quad.tl),
+            tr: toCanvas(quad.tr),
+            bl: toCanvas(quad.bl),
+            br: toCanvas(quad.br),
+          } satisfies PlateQuad;
+        }
+      } catch (err) {
+        // quad is een verfijning: zonder blijft de rechte badge staan
+        console.warn(
+          `  ⚠ ${file}: plaatvlak-segmentatie overgeslagen: ${err instanceof Error ? err.message : err}`,
+        );
+      }
+    }
   }
 
   const warnings = runQA(
@@ -487,7 +538,7 @@ async function processImage(
       cfg,
     );
     const anonymized = plateEnabled
-      ? await anonymizePlates(composited, plates, cfg.CANVAS, cfg.PLATE, cfg.AI.plateText)
+      ? await anonymizePlates(composited, plateTargets, cfg.CANVAS, cfg.PLATE, cfg.AI.plateText)
       : { image: composited, status: "off" as PlateStatus };
     plateStatus = anonymized.status;
     const branded = await applyBranding(anonymized.image, cfg.CANVAS, cfg.BRANDING);
@@ -531,6 +582,7 @@ async function processImage(
         outsideBoxRemoved,
         matteRemoved,
         plates: plates.length,
+        plateQuads: plateTargets.filter((t) => t.quad).length,
         plateStatus,
         contactClusters: shadowClusters.length,
         wheelClusters: shadowClusters,
@@ -611,7 +663,8 @@ function printSummary(results: ImageResult[], cfg: Config): void {
     (cfg.DETECT.enabled ? cfg.AI.costPerDetection : 0) +
     (cfg.AI.enabled ? 2 * cfg.AI.costPerDetection + 2 * cfg.AI.costPerQuery : 0) +
     (cfg.WINDOWS.enabled ? cfg.AI.costPerDetection + cfg.AI.costPerSegment : 0) +
-    (cfg.MATTE.enabled ? cfg.AI.costPerSegment : 0);
+    (cfg.MATTE.enabled ? cfg.AI.costPerSegment : 0) +
+    (cfg.PLATE.mode === "replace" ? cfg.AI.costPerSegment : 0);
   const monthly = cfg.MONTHLY_VOLUME * perImage;
   console.log(
     `\nkosten: $${runCost.toFixed(4)} deze run ` +
