@@ -278,16 +278,19 @@ export async function compositeImage(
 
   const scaledW = Math.max(1, Math.round(placement.width));
   const scaledH = Math.max(1, Math.round(placement.height));
-  let car = await sharp(rgba, { raw: { width, height, channels: 4 } })
+  let carPipe = sharp(rgba, { raw: { width, height, channels: 4 } })
     .extract({
       left: bbox.left,
       top: bbox.top,
       width: bbox.right - bbox.left + 1,
       height: bbox.bottom - bbox.top + 1,
     })
-    .resize(scaledW, scaledH)
-    .png()
-    .toBuffer();
+    .resize(scaledW, scaledH);
+  // het her-schalen verzacht; een milde sharpen houdt de outline en details strak
+  if (cfg.CAR_SHARPEN_SIGMA > 0) {
+    carPipe = carPipe.sharpen({ sigma: cfg.CAR_SHARPEN_SIGMA });
+  }
+  let car = await carPipe.png().toBuffer();
 
   // Sharp accepteert geen negatieve offsets: knip het zichtbare deel uit
   // wanneer de plaatsing (deels) buiten het canvas valt.

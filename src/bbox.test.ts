@@ -9,6 +9,7 @@ import {
   detectTopBump,
   erodeAlpha,
   rejectShadowBand,
+  sharpenAlphaEdges,
   restrictAlphaToBox,
   trimAlphaBelow,
 } from "./bbox.js";
@@ -366,6 +367,21 @@ describe("computeContactClusters", () => {
     const clusters = computeContactClusters(alpha, 400, 300, bbox!, 240, 10);
     expect(clusters).toHaveLength(2);
     expect(clusters[0]!.y).toBe(240);
+  });
+});
+
+describe("sharpenAlphaEdges", () => {
+  it("knijpt de overgangsband samen en behoudt kern en transparantie", () => {
+    const alpha = new Uint8Array([0, 30, 64, 100, 128, 160, 192, 220, 255]);
+    const out = sharpenAlphaEdges(alpha, 64, 192);
+    expect(out[0]).toBe(0); // transparant blijft
+    expect(out[1]).toBe(0); // zwakke rand → weg
+    expect(out[2]).toBe(0); // == low → transparant
+    expect(out[4]).toBe(128); // midden blijft midden
+    expect(out[6]).toBe(255); // == high → dekkend
+    expect(out[8]).toBe(255); // kern blijft
+    // de overgang is steiler dan het origineel
+    expect(out[5]! - out[3]!).toBeGreaterThan(160 - 100);
   });
 });
 

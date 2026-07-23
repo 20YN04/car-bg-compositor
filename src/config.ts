@@ -64,6 +64,10 @@ export interface MatteConfig {
   /** Basis-matte-model; de SAM2-combine en box-begrenzing blijven gelijk. */
   provider: MatteProvider;
   rmbgModelId: string; // fal-ai/bria/background/remove (RMBG 2.0)
+  /** Alfa-randen aanscherpen: overgangsband samenknijpen tot ~1px AA. */
+  edgeSharpen: boolean;
+  edgeLow: number; // alfa ≤ low → transparant
+  edgeHigh: number; // alfa ≥ high → dekkend
 }
 
 export interface WindowsConfig {
@@ -164,6 +168,7 @@ export interface Config {
   MASK_CLEAN: MaskCleanConfig; // opschoning: dunne/losstaande structuren (windmolen, paal) weg
   SHADOW: ShadowConfig;
   JPEG_QUALITY: number;
+  CAR_SHARPEN_SIGMA: number; // milde sharpen op de geschaalde autolaag (0 = uit)
   QA: QAConfig;
   FAL: FalConfig;
   DETECT: DetectConfig;
@@ -202,6 +207,7 @@ export const defaultConfig: Config = {
     offsetY: 0,
   },
   JPEG_QUALITY: 90,
+  CAR_SHARPEN_SIGMA: 0.8,
   QA: {
     minMaskArea: 0.08,
     maxMaskArea: 0.75,
@@ -234,12 +240,15 @@ export const defaultConfig: Config = {
   MATTE: {
     enabled: true,
     dilateRadius: 4,
-    featherSigma: 2,
+    featherSigma: 1, // strakkere rand; 2 maakte de outline zichtbaar zacht
     // A/B op ARV/RV/RVV (2026-07-23): RMBG 2.0 geeft vollere, rondere
     // bandonderkanten (BiRefNet plat de band bij RV licht af) bij even
     // scherpe spaken; geen halo's in beide. Daarom default rmbg.
     provider: "fal-rmbg",
     rmbgModelId: "fal-ai/bria/background/remove",
+    edgeSharpen: true,
+    edgeLow: 64,
+    edgeHigh: 192,
   },
   AI: {
     enabled: true,

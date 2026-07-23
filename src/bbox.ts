@@ -893,6 +893,26 @@ export function dilateMask(
   return out;
 }
 
+/**
+ * Scherpt de alfarand aan: matting-modellen leveren een brede zachte
+ * overgang (plus SAM2-feather); deze remap knijpt de overgangsband samen
+ * zodat er ~1px anti-aliasing overblijft. Onder `low` wordt transparant,
+ * boven `high` volledig dekkend, ertussen lineair geremapt.
+ */
+export function sharpenAlphaEdges(
+  alpha: Uint8Array,
+  low: number,
+  high: number,
+): Uint8Array {
+  const out = new Uint8Array(alpha.length);
+  const range = Math.max(1, high - low);
+  for (let i = 0; i < alpha.length; i++) {
+    const a = alpha[i] ?? 0;
+    out[i] = a <= low ? 0 : a >= high ? 255 : Math.round(((a - low) / range) * 255);
+  }
+  return out;
+}
+
 /** 1px erosie (3×3 min-filter) van het alfakanaal, tegen kleurhalo's. */
 export function erodeAlpha(
   alpha: Uint8Array,

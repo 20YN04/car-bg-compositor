@@ -12,6 +12,7 @@ import {
   dilateMask,
   erodeAlpha,
   restrictAlphaToBox,
+  sharpenAlphaEdges,
   trimAlphaBelow,
   type AlphaAnalysis,
 } from "./bbox.js";
@@ -319,9 +320,10 @@ async function processImage(
   if (cfg.ERODE_MASK) {
     alpha = erodeAlpha(alpha, width, height);
   }
-  if (detection || cfg.MASK_CLEAN.enabled || cfg.ERODE_MASK) {
-    for (let i = 0; i < alpha.length; i++) data[i * 4 + 3] = alpha[i] ?? 0;
+  if (cfg.MATTE.edgeSharpen) {
+    alpha = sharpenAlphaEdges(alpha, cfg.MATTE.edgeLow, cfg.MATTE.edgeHigh);
   }
+  for (let i = 0; i < alpha.length; i++) data[i * 4 + 3] = alpha[i] ?? 0;
 
   const analysis = analyzeAlpha(alpha, width, height, {
     threshold: cfg.ALPHA_THRESHOLD,
