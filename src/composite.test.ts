@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { BBox } from "./bbox.js";
-import { computePlacement } from "./composite.js";
+import { computePlacement, mapRectToCanvas } from "./composite.js";
 
 const CANVAS = { width: 1920, height: 1440 };
 const GROUND_Y = 1200;
@@ -53,6 +53,20 @@ describe("computePlacement", () => {
     const normal: BBox = { left: 0, top: 0, right: 999, bottom: 399 };
     const pNormal = computePlacement(normal, 399, CANVAS, GROUND_Y, RATIO);
     expect(pNormal.outOfCanvas).toBe(false);
+  });
+
+  it("beeldt een bronrechthoek (nummerplaat) correct af op het canvas", () => {
+    const bbox: BBox = { left: 100, top: 200, right: 899, bottom: 599 };
+    const p = computePlacement(bbox, 599, CANVAS, GROUND_Y, RATIO);
+    // plaat van 100×20 die precies op de linkerbovenhoek van de bbox begint
+    const rect = mapRectToCanvas({ x: 100, y: 200, w: 100, h: 20 }, bbox, p);
+    expect(rect.x).toBeCloseTo(p.x);
+    expect(rect.y).toBeCloseTo(p.y);
+    expect(rect.width).toBeCloseTo(100 * p.scale);
+    expect(rect.height).toBeCloseTo(20 * p.scale);
+    // en het bbox-midden komt uit op het canvasmidden (horizontaal gecentreerd)
+    const mid = mapRectToCanvas({ x: 500, y: 400, w: 0, h: 0 }, bbox, p);
+    expect(mid.x).toBeCloseTo(1920 / 2);
   });
 
   it("respecteert een aangepaste CAR_WIDTH_RATIO", () => {

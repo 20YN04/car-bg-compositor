@@ -36,6 +36,15 @@ export interface FalConfig {
   refineForeground: boolean;
 }
 
+export interface AiConfig {
+  enabled: boolean;
+  plateText: string; // tekst op de vervangende nummerplaat
+  detectionModelId: string; // plaatdetectie (bbox uit tekstprompt)
+  vlmModelId: string; // visual question answering voor AI-kwaliteitscontrole
+  costPerDetection: number;
+  costPerQuery: number;
+}
+
 export interface Config {
   CANVAS: CanvasSize;
   GROUND_Y: number; // y-coördinaat waar de banden komen te staan
@@ -48,6 +57,7 @@ export interface Config {
   JPEG_QUALITY: number;
   QA: QAConfig;
   FAL: FalConfig;
+  AI: AiConfig;
   COST_PER_CALL_USD: number;
 }
 
@@ -87,6 +97,15 @@ export const defaultConfig: Config = {
     operatingResolution: "2048x2048",
     outputFormat: "png",
     refineForeground: true,
+  },
+  AI: {
+    enabled: true,
+    plateText: "CARREDO",
+    detectionModelId: "fal-ai/florence-2-large/caption-to-phrase-grounding",
+    vlmModelId: "fal-ai/moondream2/visual-query",
+    // ijken op het fal-dashboard
+    costPerDetection: 0.001,
+    costPerQuery: 0.001,
   },
   // IJken op het fal.ai-dashboard: prijs staat niet in de publieke docs.
   COST_PER_CALL_USD: 0.002,

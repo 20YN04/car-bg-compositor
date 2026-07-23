@@ -1,6 +1,6 @@
 import "dotenv/config";
 import { existsSync } from "node:fs";
-import { appendFile, mkdir, readdir, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import sharp from "sharp";
@@ -12,7 +12,9 @@ import {
   type Placement,
 } from "./composite.js";
 import { defaultConfig, type Config } from "./config.js";
+import { aiStats, detectPlates, visualYesNo } from "./ai.js";
 import { getCutout, maskStats } from "./mask.js";
+import { mapRectToCanvas, type CanvasRect } from "./composite.js";
 import { runQA, type QAWarning } from "./qa.js";
 
 const IN_DIR = "./in";
@@ -27,7 +29,19 @@ interface CliOptions {
   bg?: string;
   useCache: boolean;
   debug: boolean;
+  ai: boolean;
 }
+
+const MASK_PROMPT =
+  "This is a cutout of a car on a plain gray background. Is the car complete " +
+  "and intact, with no missing parts such as wheels, mirrors or roof, and " +
+  "with no unrelated objects like poles, wind turbines or people attached " +
+  "to it? Answer YES or NO, followed by a short reason.";
+
+const GROUND_PROMPT =
+  "Does the car in this image appear to stand naturally on the floor, with " +
+  "its tires touching the ground, not floating above it and not sunk into " +
+  "it? Answer YES or NO, followed by a short reason.";
 
 function parseCli(): { cfg: Config; cli: CliOptions } {
   const { values } = parseArgs({
@@ -38,6 +52,7 @@ function parseCli(): { cfg: Config; cli: CliOptions } {
       "car-width": { type: "string" },
       "no-cache": { type: "boolean", default: false },
       "no-debug": { type: "boolean", default: false },
+      "no-ai": { type: "boolean", default: false },
     },
   });
 
@@ -59,6 +74,7 @@ function parseCli(): { cfg: Config; cli: CliOptions } {
       bg: values.bg,
       useCache: !values["no-cache"],
       debug: !values["no-debug"],
+      ai: !values["no-ai"],
     },
   };
 }
@@ -194,13 +210,67 @@ async function processImage(
   }
   const warnings = runQA(analysis, width, height, placement, cfg, cleanRemovedArea);
 
+  // nummerplaten detecteren en mappen naar canvascoördinaten
+  let plates: CanvasRect[] = [];
+  if (cfg.AI.enabled && cli.ai && analysis.bbox && placement) {
+    const inputBytes = await readFile(inputPath);
+    const detected = await detectPlates(inputBytes, CACHE_DIR, cfg.AI, cli.useCache);
+    plates = detected
+      .filter((p) => {
+        // alleen platen die daadwerkelijk op de gemaskeerde auto liggen
+        const cx = Math.round(p.x + p.w / 2);
+        const cy = Math.round(p.y + p.h / 2);
+        return (
+          cx >= 0 && cx < width && cy >= 0 && cy < height &&
+          (alpha[cy * width + cx] ?? 0) > cfg.ALPHA_THRESHOLD
+        );
+      })
+      // kleine marge zodat de originele plaat gegarandeerd volledig bedekt is
+      .map((p) => ({
+        x: p.x - p.w * 0.05,
+        y: p.y - p.h * 0.04,
+        w: p.w * 1.1,
+        h: p.h * 1.08,
+      }))
+      .map((p) => mapRectToCanvas(p, analysis.bbox!, placement!))
+      .filter((r) => r.width >= 8 && r.height >= 4);
+    if (plates.length === 0) {
+      warnings.push({
+        code: "PLATE_NOT_FOUND",
+        message: `geen nummerplaat op de auto gedetecteerd — geen ${cfg.AI.plateText}-overlay geplaatst`,
+      });
+    }
+  }
+
+  let outJpeg: Buffer | null = null;
   if (analysis.bbox && placement) {
-    const jpeg = await compositeImage(
-      { rgba: data, width, height, bbox: analysis.bbox, placement, backgroundPath },
+    outJpeg = await compositeImage(
+      {
+        rgba: data, width, height, bbox: analysis.bbox, placement, backgroundPath,
+        plates, plateText: cfg.AI.plateText,
+      },
       cfg,
     );
     const outName = path.parse(file).name + ".jpg";
-    await writeFile(path.join(OUT_DIR, outName), jpeg);
+    await writeFile(path.join(OUT_DIR, outName), outJpeg);
+  }
+
+  // AI-kwaliteitscontrole: masker compleet? auto op de grond?
+  if (cfg.AI.enabled && cli.ai && analysis.bbox) {
+    const flatCutout = await sharp(cutout)
+      .flatten({ background: "#808080" })
+      .jpeg({ quality: 85 })
+      .toBuffer();
+    const maskCheck = await visualYesNo(flatCutout, MASK_PROMPT, CACHE_DIR, cfg.AI, cli.useCache);
+    if (!maskCheck.yes) {
+      warnings.push({ code: "AI_MASK_SUSPECT", message: `AI-maskcheck: ${maskCheck.answer}` });
+    }
+    if (outJpeg) {
+      const groundCheck = await visualYesNo(outJpeg, GROUND_PROMPT, CACHE_DIR, cfg.AI, cli.useCache);
+      if (!groundCheck.yes) {
+        warnings.push({ code: "AI_NOT_GROUNDED", message: `AI-grondcheck: ${groundCheck.answer}` });
+      }
+    }
   }
 
   if (cli.debug) {
@@ -225,8 +295,9 @@ function printSummary(results: ImageResult[], cfg: Config): void {
     console.log(`gefaald:     ${failed.length}`);
     for (const f of failed) console.log(`  ✗ ${f.file}: ${f.error}`);
   }
-  console.log(`API-calls:   ${maskStats.apiCalls}`);
-  console.log(`cache-hits:  ${maskStats.cacheHits}`);
+  console.log(`BiRefNet:    ${maskStats.apiCalls} calls, ${maskStats.cacheHits} cache-hits`);
+  console.log(`plaatdetect: ${aiStats.detectCalls} calls, ${aiStats.detectCacheHits} cache-hits`);
+  console.log(`AI-checks:   ${aiStats.vlmCalls} calls, ${aiStats.vlmCacheHits} cache-hits`);
 
   const byCode = new Map<string, string[]>();
   for (const r of results) {
@@ -245,11 +316,17 @@ function printSummary(results: ImageResult[], cfg: Config): void {
     console.log("geen waarschuwingen");
   }
 
-  const runCost = maskStats.apiCalls * cfg.COST_PER_CALL_USD;
-  const monthly = 75_000 * cfg.COST_PER_CALL_USD;
+  const runCost =
+    maskStats.apiCalls * cfg.COST_PER_CALL_USD +
+    aiStats.detectCalls * cfg.AI.costPerDetection +
+    aiStats.vlmCalls * cfg.AI.costPerQuery;
+  const perImage = cfg.AI.enabled
+    ? cfg.COST_PER_CALL_USD + cfg.AI.costPerDetection + 2 * cfg.AI.costPerQuery
+    : cfg.COST_PER_CALL_USD;
+  const monthly = 75_000 * perImage;
   console.log(
     `\nkosten: $${runCost.toFixed(4)} deze run ` +
-      `($${cfg.COST_PER_CALL_USD}/call — ijken op fal-dashboard)`,
+      `(per beeld: $${perImage.toFixed(4)} — tarieven ijken op fal-dashboard)`,
   );
   console.log(`extrapolatie 75.000 beelden/maand: ~$${monthly.toFixed(0)}/maand`);
 }

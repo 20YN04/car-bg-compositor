@@ -14,7 +14,7 @@ export const maskStats: MaskStats = { apiCalls: 0, cacheHits: 0 };
 
 let falConfigured = false;
 
-function ensureFalKey(): void {
+export function ensureFalKey(): void {
   if (falConfigured) return;
   const key = process.env.FAL_KEY;
   if (!key) {

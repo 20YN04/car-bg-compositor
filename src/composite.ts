@@ -37,6 +37,56 @@ export function computePlacement(
   return { scale, x, y, width, height, outOfCanvas };
 }
 
+export interface CanvasRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * Beeldt een rechthoek in broncoördinaten (bv. een gedetecteerde nummerplaat)
+ * af op canvascoördinaten, via dezelfde crop+schaal als de auto zelf.
+ */
+export function mapRectToCanvas(
+  rect: { x: number; y: number; w: number; h: number },
+  bbox: BBox,
+  placement: Placement,
+): CanvasRect {
+  return {
+    x: placement.x + (rect.x - bbox.left) * placement.scale,
+    y: placement.y + (rect.y - bbox.top) * placement.scale,
+    width: rect.w * placement.scale,
+    height: rect.h * placement.scale,
+  };
+}
+
+function plateSvg(canvas: CanvasSize, plates: CanvasRect[], text: string): Buffer {
+  const shapes = plates
+    .map((p) => {
+      const r = Math.min(p.width, p.height) * 0.08;
+      // librsvg ondersteunt textLength niet betrouwbaar: fontgrootte zelf
+      // passend maken (Arial bold ≈ 0.62 × fontSize per teken)
+      const fontSize = Math.min(
+        p.height * 0.62,
+        (p.width * 0.85) / (Math.max(1, text.length) * 0.62),
+      );
+      const cx = p.x + p.width / 2;
+      const cy = p.y + p.height / 2;
+      return (
+        `<rect x="${p.x}" y="${p.y}" width="${p.width}" height="${p.height}" rx="${r}"` +
+        ` fill="#f4f4f4" stroke="#1a1a1a" stroke-width="${Math.max(1, p.height * 0.04)}"/>` +
+        `<text x="${cx}" y="${cy}" font-family="Arial, sans-serif" font-weight="bold"` +
+        ` font-size="${fontSize}" fill="#1a1a1a" text-anchor="middle"` +
+        ` dominant-baseline="central">${text}</text>`
+      );
+    })
+    .join("");
+  return Buffer.from(
+    `<svg width="${canvas.width}" height="${canvas.height}" xmlns="http://www.w3.org/2000/svg">${shapes}</svg>`,
+  );
+}
+
 function shadowSvg(
   canvas: CanvasSize,
   placement: Placement,
@@ -62,6 +112,8 @@ export interface CompositeInput {
   bbox: BBox;
   placement: Placement;
   backgroundPath: string;
+  plates?: CanvasRect[]; // nummerplaten in canvascoördinaten, overlay met plateText
+  plateText?: string;
 }
 
 /** Composite: achtergrond → schaduw (multiply) → auto. Schrijft JPEG-bytes. */
@@ -115,11 +167,16 @@ export async function compositeImage(
     top = Math.max(0, top);
   }
 
+  const layers: sharp.OverlayOptions[] = [
+    { input: shadow, blend: "multiply" },
+    { input: car, left, top },
+  ];
+  if (input.plates && input.plates.length > 0 && input.plateText) {
+    layers.push({ input: plateSvg(canvas, input.plates, input.plateText) });
+  }
+
   return sharp(background)
-    .composite([
-      { input: shadow, blend: "multiply" },
-      { input: car, left, top },
-    ])
+    .composite(layers)
     .jpeg({ quality: cfg.JPEG_QUALITY })
     .toBuffer();
 }

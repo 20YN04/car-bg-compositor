@@ -11,7 +11,10 @@ export type QACode =
   | "BAD_ASPECT"
   | "MULTIPLE_BLOBS"
   | "OUT_OF_CANVAS"
-  | "STRAY_MASK_REMOVED";
+  | "STRAY_MASK_REMOVED"
+  | "PLATE_NOT_FOUND"
+  | "AI_MASK_SUSPECT"
+  | "AI_NOT_GROUNDED";
 
 export interface QAWarning {
   code: QACode;

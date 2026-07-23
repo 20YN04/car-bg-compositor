@@ -29,8 +29,9 @@ pnpm start --file foo.jpg           # één beeld
 pnpm start --bg studio-grey.jpg     # andere achtergrond (uit ./backgrounds/)
 pnpm start --ground-y 1100          # config overriden zonder file-edit
 pnpm start --car-width 0.75         # idem
-pnpm start --no-cache               # forceer nieuwe API-call
+pnpm start --no-cache               # forceer nieuwe API-calls
 pnpm start --no-debug               # sla debug-output over
+pnpm start --no-ai                  # sla plaatvervanging + AI-checks over
 ```
 
 Resultaten komen in `./out/` (JPEG). Per beeld verschijnt in `./debug/` het
@@ -56,6 +57,7 @@ draaien (bijv. tijdens het tunen van de compositing) kost geen API-credits.
 | `JPEG_QUALITY` | uitvoerkwaliteit |
 | `QA` | drempels voor de kwaliteitswaarschuwingen |
 | `FAL` | BiRefNet-variant en resolutie (default "General Use (Heavy)" @ 2048×2048) |
+| `AI` | nummerplaatvervanging (`plateText`, default "CARREDO") via Florence-2-detectie + overlay, en AI-kwaliteitscontroles via een vision-model (masker compleet? auto op de grond?) |
 | `COST_PER_CALL_USD` | prijs per API-call voor de kostenschatting — ijken op het fal-dashboard |
 
 ## Kwaliteitscontrole
@@ -65,6 +67,21 @@ te klein/groot masker, auto afgesneden aan de onderrand (grondlijn
 onbetrouwbaar), bbox raakt een beeldrand, aspect ratio die niet op een
 volledige auto wijst (interieur/detailshot), meerdere losse blobs in het
 masker, plaatsing buiten het canvas.
+
+## Nummerplaat en AI-controles
+
+Per beeld wordt de nummerplaat gedetecteerd (`fal-ai/florence-2-large/
+caption-to-phrase-grounding`) en vervangen door een getekende plaat met de
+`AI.plateText` erop — een wiskundige overlay, geen generatieve bewerking.
+Daarnaast beoordeelt een klein vision-model (`fal-ai/moondream2/visual-query`)
+per beeld of het masker compleet oogt en of de auto in het eindbeeld op de
+grond staat; een afwijzing verschijnt als `AI_MASK_SUSPECT` / `AI_NOT_GROUNDED`
+in de samenvatting. Alle AI-resultaten worden gecachet op content-hash.
+
+Bekende beperking: de plaatoverlay volgt de detectie-bbox (axis-aligned), niet
+het perspectief van de plaat. Bij schuine hoeken kan de plaat er daardoor wat
+recht/vierkant uitzien. Perspectiefcorrecte vervanging vergt hoekpuntdetectie
+en hoort bij de productie-pipeline, niet bij deze testtool.
 
 ## Tests
 
