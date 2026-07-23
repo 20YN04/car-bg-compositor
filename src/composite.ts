@@ -99,32 +99,60 @@ export function buildContactShadows(
   });
 }
 
-function ambientShadowSvg(
+/**
+ * Ambient-schaduw uit het autosilhouet: het alfakanaal van de geschaalde auto
+ * wordt verticaal platgedrukt tot een dunne band en zwaar geblurd. De schaduw
+ * volgt zo de werkelijke onderlijn (neusoverhang, wielbasis) in plaats van een
+ * ellips die als grijze blob naast de auto uitsteekt. Puur mathematisch.
+ */
+async function silhouetteShadow(
+  car: Buffer,
+  scaledW: number,
   canvas: CanvasSize,
-  placement: Placement,
-  groundY: number,
+  carLeft: number,
+  contactY: number,
   cfg: Config,
   hasContacts: boolean,
   profile: BackgroundProfile,
-): Buffer {
+): Promise<Buffer> {
   const s = cfg.SHADOW;
-  // schaduw verschuift van het licht weg: lichtDirX < 0 (licht van links)
-  // duwt de schaduw naar rechts
+  const shH = Math.max(24, Math.round(s.height));
+  const opacity = hasContacts ? s.opacity * 0.6 : s.opacity;
+  const mask = await sharp(car)
+    .ensureAlpha()
+    .extractChannel(3)
+    .resize(scaledW, shH, { fit: "fill" })
+    .raw()
+    .toBuffer();
+  const px = Buffer.alloc(scaledW * shH * 4);
+  for (let i = 0; i < scaledW * shH; i++) {
+    px[i * 4 + 3] = Math.round((mask[i] ?? 0) * opacity);
+  }
   const lightShift = -profile.lightDirX;
-  const cx =
-    placement.x + placement.width / 2 + s.offsetX + lightShift * placement.width * 0.05;
-  const cy = groundY + s.offsetY;
-  const rx = (placement.width * s.widthRatio) / 2;
-  const ry = s.height / 2;
-  // met contactclusters wordt de brede ellips een zachte ambient-schaduw en
-  // draagt de aparte contactlaag het eigenlijke contact; zonder clusters
-  // (fallback) blijft het oude gedrag: één ellips op volle sterkte
-  const ambientOpacity = hasContacts ? s.opacity * 0.55 : s.opacity;
-  return Buffer.from(
-    `<svg width="${canvas.width}" height="${canvas.height}" xmlns="http://www.w3.org/2000/svg">` +
-      `<ellipse cx="${cx}" cy="${cy}" rx="${rx}" ry="${ry}" fill="black" fill-opacity="${ambientOpacity}"/>` +
-      `</svg>`,
+  const left = Math.round(
+    carLeft + s.offsetX + lightShift * scaledW * 0.03,
   );
+  // band straddlet de contactlijn: het grootste deel valt eronder, een klein
+  // deel erboven zodat de donkerte onder de dorpels doorloopt
+  const top = Math.round(contactY + s.offsetY - shH * 0.45);
+  return sharp({
+    create: {
+      width: canvas.width,
+      height: canvas.height,
+      channels: 4,
+      background: { r: 0, g: 0, b: 0, alpha: 0 },
+    },
+  })
+    .composite([
+      {
+        input: px,
+        raw: { width: scaledW, height: shH, channels: 4 },
+        left: Math.max(0, left),
+        top: Math.max(0, top),
+      },
+    ])
+    .png()
+    .toBuffer();
 }
 
 function contactShadowSvg(
@@ -138,7 +166,7 @@ function contactShadowSvg(
   // zachte poel per wiel: donkerst op het contactpunt, radiaal uitvloeiend —
   // geen harde ellipsrand. Dit verankert de band visueel op de vloer en
   // vangt de zachte maskertaper bij het contactpunt op.
-  const opacity = Math.min(0.7, s.opacity * 1.5);
+  const opacity = Math.min(0.6, s.opacity * 1.15);
   const defs = contacts
     .map(
       (_, i) =>
@@ -152,7 +180,7 @@ function contactShadowSvg(
   const shapes = contacts
     .map(
       (c, i) =>
-        `<ellipse cx="${c.cx + lightShift * c.ry * 1.5}" cy="${c.cy}" rx="${c.rx * 1.25}" ry="${c.ry * 1.4}"` +
+        `<ellipse cx="${c.cx + lightShift * c.ry * 1.5}" cy="${c.cy}" rx="${c.rx * 1.1}" ry="${c.ry * 1.15}"` +
         ` fill="url(#cs${i})"/>`,
     )
     .join("");
@@ -260,14 +288,6 @@ export async function compositeImage(
     .toBuffer();
 
   const contacts = input.contactShadows ?? [];
-  const shadow = await sharp(
-    ambientShadowSvg(
-      canvas, placement, input.contactY, cfg, contacts.length > 0, input.profile,
-    ),
-  )
-    .blur(cfg.SHADOW.blur * input.profile.lightSoftness)
-    .png()
-    .toBuffer();
   const contactShadow =
     contacts.length > 0
       ? await sharp(contactShadowSvg(canvas, cfg, contacts, input.profile))
@@ -291,6 +311,17 @@ export async function compositeImage(
     carPipe = carPipe.sharpen({ sigma: cfg.CAR_SHARPEN_SIGMA });
   }
   let car = await carPipe.png().toBuffer();
+
+  // ambient-schaduw uit het (volledige, ongecropte) autosilhouet
+  const shadow = await sharp(
+    await silhouetteShadow(
+      car, scaledW, canvas, Math.round(placement.x), input.contactY, cfg,
+      contacts.length > 0, input.profile,
+    ),
+  )
+    .blur(cfg.SHADOW.blur * input.profile.lightSoftness)
+    .png()
+    .toBuffer();
 
   // Sharp accepteert geen negatieve offsets: knip het zichtbare deel uit
   // wanneer de plaatsing (deels) buiten het canvas valt.

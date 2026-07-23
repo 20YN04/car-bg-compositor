@@ -59,14 +59,22 @@ describe("computePlateRegions", () => {
 });
 
 describe("fitPlateInRegion", () => {
-  it("past een EU-verhouding (≈4.6:1) in een vierkante detectiezone", () => {
+  it("klemt de verhouding op plaatachtig (3.4:1) in een brede detectiezone", () => {
     const fit = fitPlateInRegion({ x: 100, y: 100, width: 200, height: 120 });
-    expect(fit.width / fit.height).toBeCloseTo(4.6, 0);
+    expect(fit.width / fit.height).toBeCloseTo(3.4, 1);
     expect(fit.width).toBeLessThanOrEqual(200);
     expect(fit.height).toBeLessThanOrEqual(120);
     // gecentreerd
     expect(fit.left).toBeGreaterThan(100);
     expect(fit.top).toBeGreaterThan(100);
+  });
+
+  it("volgt de regioverhouding bij een plaatachtige zone en dekt die maximaal", () => {
+    const fit = fitPlateInRegion({ x: 0, y: 0, width: 92, height: 20 });
+    // regioverhouding 4.6, met ±0.1 speling door pixelafronding
+    expect(fit.width / fit.height).toBeGreaterThan(4.4);
+    expect(fit.width / fit.height).toBeLessThan(4.8);
+    expect(fit.width).toBeGreaterThanOrEqual(88); // ≥97% dekking
   });
 });
 
@@ -114,21 +122,22 @@ describe("anonymizePlates", () => {
     expect(await pixel(image, 10, 10)).toEqual(await pixel(img, 10, 10));
   });
 
-  it("mode replace legt een EU-plaat met blauwe band over de regio", async () => {
+  it("mode replace legt een donkere CARREDO-badge over de regio", async () => {
     const img = await testImage();
     const { image, status } = await anonymizePlates(
       img, [region], canvas, { ...defaultConfig.PLATE, mode: "replace" }, "X",
     );
     expect(status).toBe("replaced");
-    // plaatmidden: lichte plaatachtergrond, geel origineel bedekt
+    // plaatmidden: wit wordmark ("X") op de badge
     const [r, g, b] = await pixel(image, 100, 50);
     expect(r).toBeGreaterThan(200);
     expect(g).toBeGreaterThan(200);
     expect(b).toBeGreaterThan(200);
-    // linkerkant van de plaat: blauwe EU-band
-    const [br, , bb] = await pixel(image, 65, 50);
-    expect(bb!).toBeGreaterThan(100);
-    expect(bb!).toBeGreaterThan((br ?? 0) + 40);
+    // plaatvlak naast het wordmark: donkere badge, geel origineel bedekt
+    const [dr, dg, db] = await pixel(image, 72, 50);
+    expect(dr).toBeLessThan(60);
+    expect(dg).toBeLessThan(60);
+    expect(db).toBeLessThan(60);
   });
 
   it("geen regio's → status none", async () => {

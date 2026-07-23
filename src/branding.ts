@@ -17,11 +17,21 @@ export async function applyBranding(
   let left: number;
   let top: number;
   if (cfg.logoPath && existsSync(cfg.logoPath)) {
-    const targetW = Math.round(canvas.width * 0.12);
-    overlay = await sharp(cfg.logoPath)
+    const targetW = Math.round(canvas.width * 0.13);
+    let logoPipe = sharp(cfg.logoPath)
       .resize(targetW, null, { fit: "inside" })
-      .png()
-      .toBuffer();
+      .ensureAlpha();
+    if (cfg.opacity < 1) {
+      // dekking op het hele logo: alfakanaal schalen, kleuren onaangeroerd
+      const { data, info } = await logoPipe.raw().toBuffer({ resolveWithObject: true });
+      for (let i = 0; i < info.width * info.height; i++) {
+        data[i * 4 + 3] = Math.round((data[i * 4 + 3] ?? 0) * cfg.opacity);
+      }
+      logoPipe = sharp(data, {
+        raw: { width: info.width, height: info.height, channels: 4 },
+      });
+    }
+    overlay = await logoPipe.png().toBuffer();
     const meta = await sharp(overlay).metadata();
     left = canvas.width - cfg.margin - (meta.width ?? targetW);
     top = canvas.height - cfg.margin - (meta.height ?? Math.round(targetW / 3));

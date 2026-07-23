@@ -76,47 +76,67 @@ async function blurOverlay(
   compositedPng: Buffer,
   r: CanvasRect,
   sigma: number,
+  feather = 0,
 ): Promise<sharp.OverlayOptions> {
-  const input = await sharp(compositedPng)
+  let patch = sharp(compositedPng)
     .extract({ left: r.x, top: r.y, width: r.width, height: r.height })
-    .blur(sigma)
-    .png()
-    .toBuffer();
+    .blur(sigma);
+  if (feather > 0) {
+    // rand van de patch laten uitvloeien in het scherpe beeld: zonder feather
+    // tekent de blurzone zich als rechthoekige veeg af rond de badge. De
+    // volledig dekkende kern blijft ruim groter dan de gedetecteerde plaat.
+    const f = Math.max(2, Math.min(feather, Math.floor(Math.min(r.width, r.height) / 4)));
+    const mask = Buffer.from(
+      `<svg width="${r.width}" height="${r.height}" xmlns="http://www.w3.org/2000/svg">` +
+        `<rect x="${f}" y="${f}" width="${r.width - 2 * f}" height="${r.height - 2 * f}"` +
+        ` rx="${f}" fill="white"/>` +
+        `</svg>`,
+    );
+    const feathered = await sharp(mask).blur(f / 2).png().toBuffer();
+    patch = patch.composite([{ input: feathered, blend: "dest-in" }]);
+  }
+  const input = await patch.png().toBuffer();
   return { input, left: r.x, top: r.y };
 }
 
-/** CARREDO-plaat in EU-verhouding: blauwe band, rand, afgeronde hoeken. */
+/**
+ * CARREDO-badge zoals op de live carredo-beelden: donkere plaat, dunne lichte
+ * rand, wit wordmark — geen EU-band. Valt visueel weg in de plaatuitsparing.
+ */
 function carredoPlateSvg(w: number, h: number, text: string): Buffer {
-  const band = Math.max(6, Math.round(w * 0.08));
-  const r = Math.max(2, Math.round(h * 0.14));
-  const stroke = Math.max(1.5, h * 0.05);
+  const r = Math.max(2, Math.round(h * 0.16));
+  const stroke = Math.max(1.5, h * 0.06);
+  const inset = stroke * 1.6;
   const fontSize = Math.min(
-    h * 0.68,
-    ((w - band) * 0.82) / (Math.max(1, text.length) * 0.62),
+    h * 0.56,
+    (w * 0.72) / (Math.max(1, text.length) * 0.62),
   );
   return Buffer.from(
     `<svg width="${w}" height="${h}" xmlns="http://www.w3.org/2000/svg">` +
-      `<rect x="${stroke / 2}" y="${stroke / 2}" width="${w - stroke}" height="${h - stroke}"` +
-      ` rx="${r}" fill="#f8f9fa" stroke="#16213e" stroke-width="${stroke}"/>` +
-      `<path d="M ${stroke / 2} ${r} A ${r} ${r} 0 0 1 ${r} ${stroke / 2}` +
-      ` L ${band} ${stroke / 2} L ${band} ${h - stroke / 2} L ${r} ${h - stroke / 2}` +
-      ` A ${r} ${r} 0 0 1 ${stroke / 2} ${h - r} Z" fill="#003399"/>` +
-      `<text x="${band + (w - band) / 2}" y="${h / 2}" font-family="Arial, sans-serif"` +
-      ` font-weight="bold" font-size="${fontSize}" letter-spacing="${fontSize * 0.06}"` +
-      ` fill="#16213e" text-anchor="middle" dominant-baseline="central">${text}</text>` +
+      `<rect width="${w}" height="${h}" rx="${r}" fill="#0c0e12"/>` +
+      `<rect x="${inset}" y="${inset}" width="${w - inset * 2}" height="${h - inset * 2}"` +
+      ` rx="${Math.max(1, r - inset)}" fill="none" stroke="#e9ecef" stroke-width="${stroke}"/>` +
+      `<text x="${w / 2}" y="${h / 2}" font-family="Arial, sans-serif"` +
+      ` font-weight="bold" font-size="${fontSize}" letter-spacing="${fontSize * 0.1}"` +
+      ` fill="#f4f5f7" text-anchor="middle" dominant-baseline="central">${text}</text>` +
       `</svg>`,
   );
 }
 
-/** Past de plaat in EU-verhouding (≈4.6:1) binnen de gedetecteerde zone. */
+/**
+ * Past de badge in de gedetecteerde zone. De verhouding volgt de regio zelf
+ * (geklemd op plaatachtige 3.4–5.2:1) zodat de badge de zone maximaal dekt —
+ * bij schuine platen is de axis-aligned box hoger dan een strikte
+ * EU-verhouding toelaat en bleef de originele plaat anders zichtbaar.
+ */
 export function fitPlateInRegion(
   r: CanvasRect,
 ): { left: number; top: number; width: number; height: number } {
-  const aspect = 4.6;
-  let width = r.width * 0.94;
+  const aspect = Math.min(5.2, Math.max(3.4, r.width / r.height));
+  let width = r.width * 0.97;
   let height = width / aspect;
-  if (height > r.height * 0.94) {
-    height = r.height * 0.94;
+  if (height > r.height * 0.97) {
+    height = r.height * 0.97;
     width = height * aspect;
   }
   return {
@@ -145,9 +165,19 @@ export async function anonymizePlates(
   if (plateCfg.mode === "replace") {
     const overlays: sharp.OverlayOptions[] = [];
     for (const r of regions) {
-      // eerst de originele plaat + frame laten wegvallen (blur behoudt de
-      // omgevingskleuren), dán de plaat in echte EU-verhouding
-      overlays.push(await blurOverlay(compositedPng, r, plateCfg.blurSigma));
+      // de volledige regio blurren blijft de dekgarantie (bij schuine platen
+      // steekt de plaat buiten elke badge met plaatverhouding); de donkere
+      // badge erbovenop maskeert het gros van de veeg
+      // sigma schaalt mee met de regio: een vaste sigma laat een grote,
+      // beeldvullende plaat leesbaar; de feather blijft smal zodat de
+      // uitvloeiende rand nooit over de plaat zelf valt
+      const sigma = Math.max(plateCfg.blurSigma, Math.min(r.width, r.height) / 5);
+      overlays.push(
+        await blurOverlay(
+          compositedPng, r, sigma,
+          Math.round(Math.min(r.width, r.height) * 0.1),
+        ),
+      );
       const fit = fitPlateInRegion(r);
       if (plateCfg.overlayPath && existsSync(plateCfg.overlayPath)) {
         overlays.push({

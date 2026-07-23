@@ -269,7 +269,10 @@ export const defaultConfig: Config = {
   BRANDING: {
     enabled: true,
     text: "CARREDO",
-    opacity: 0.55,
+    // echte Carredo-wordmark (navy, transparante PNG) zoals op de live site;
+    // de tekst-fallback blijft voor wie zonder asset draait
+    logoPath: "assets/carredo-logo.png",
+    opacity: 0.92,
     fontSize: 40,
     margin: 56,
   },
@@ -303,8 +306,10 @@ export const defaultConfig: Config = {
     carWidthMeters: 4.4,
     lightDirX: 0,
     lightSoftness: 1,
-    floorReflectivity: 0.12,
-    reflectionHeightRatio: 0.25,
+    // ingetogen op de vloerloze gradient: een sterke spiegeling leest daar
+    // als "natte vloer"-ghost in plaats van als subtiele verankering
+    floorReflectivity: 0.08,
+    reflectionHeightRatio: 0.16,
     glowStrength: 0.1,
     vignetteStrength: 0.12,
     toneBrightness: 1,
