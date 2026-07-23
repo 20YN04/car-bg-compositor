@@ -134,6 +134,19 @@ export interface BackgroundProfile {
   lightSoftness: number; // multiplier op de schaduwblur
   floorReflectivity: number; // 0..1 sterkte van de vloerreflectie
   reflectionHeightRatio: number; // fractie van de autohoogte die meespiegelt
+  glowStrength: number; // zachte hotspot achter de auto (screen blend)
+  vignetteStrength: number; // donkere hoeken
+  toneBrightness: number; // 1 = ongewijzigd; <1 iets donkerder
+  toneWarmth: number; // 0 = neutraal; >0 warmer (r omhoog, b omlaag)
+}
+
+export interface BrandingConfig {
+  enabled: boolean;
+  text: string; // wordmark wanneer er geen logoPath is
+  logoPath?: string; // eigen logo-afbeelding (png met transparantie)
+  opacity: number;
+  fontSize: number;
+  margin: number; // afstand tot de rechterbenedenhoek
 }
 
 export interface Config {
@@ -153,6 +166,7 @@ export interface Config {
   AI: AiConfig;
   PLATE: PlateConfig;
   WINDOWS: WindowsConfig;
+  BRANDING: BrandingConfig;
   BACKGROUND_PROFILES: Record<string, BackgroundProfile>; // key = bestandsnaam
   DEFAULT_PROFILE: BackgroundProfile;
   HARMONIZE: HarmonizeConfig;
@@ -228,21 +242,37 @@ export const defaultConfig: Config = {
     costPerSegment: 0.002,
   },
   PLATE: {
-    mode: "blur",
+    // branded look: CARREDO-plaat i.p.v. blur (anonimiseert evengoed)
+    mode: "replace",
     blurSigma: 12,
     style: "gaussian",
+  },
+  BRANDING: {
+    enabled: true,
+    text: "CARREDO",
+    opacity: 0.55,
+    fontSize: 40,
+    margin: 56,
   },
   BACKGROUND_PROFILES: {
     // gekalibreerd op de betonvloer-showroomplate (1440×938 → cover 1920×1440)
     "showroom.jpg": {
       horizonY: 867,
-      contactTargetY: 1150,
+      // 1195 i.p.v. 1150: bij sterke 3/4-views staat het verre wiel door de
+      // gebakken fotoperspectief tot ~300px hoger dan het nabije wiel; met de
+      // contactlijn dieper op de vloer blijft ook dat wiel onder de
+      // wand/vloerovergang (867) in plaats van "op de muur" te landen
+      contactTargetY: 1195,
       floorScaleRef: 314,
       carWidthMeters: 4.4,
       lightDirX: -0.35, // plate is links het lichtst
       lightSoftness: 1.2,
       floorReflectivity: 0.12,
       reflectionHeightRatio: 0.18, // subtiel en snel uitgefaded
+      glowStrength: 0.14,
+      vignetteStrength: 0.18,
+      toneBrightness: 0.96, // referentie is een tikje donkerder
+      toneWarmth: 0.025, // en een tikje warmer grijs
 
     },
   },
@@ -255,7 +285,11 @@ export const defaultConfig: Config = {
     lightDirX: 0,
     lightSoftness: 1,
     floorReflectivity: 0.12,
-    reflectionHeightRatio: 0.3,
+    reflectionHeightRatio: 0.25,
+    glowStrength: 0.1,
+    vignetteStrength: 0.12,
+    toneBrightness: 1,
+    toneWarmth: 0,
   },
   HARMONIZE: {
     enabled: true,

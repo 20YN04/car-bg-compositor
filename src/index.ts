@@ -35,6 +35,7 @@ import { getCarBox, getCutout, maskStats } from "./mask.js";
 import { buildContactShadows, type CanvasRect } from "./composite.js";
 import { anonymizePlates, computePlateRegions, type PlateStatus } from "./plate.js";
 import { backgroundMeans, cutoutMeans, harmonizeColors } from "./harmonize.js";
+import { applyBranding } from "./branding.js";
 import { runQA, type QAWarning } from "./qa.js";
 
 const IN_DIR = "./in";
@@ -244,6 +245,7 @@ async function processImage(
   // instancemasker (auto-box als prompt); de aangesmolten grondschaduw ligt
   // buiten dat masker en verdwijnt zo bij de bron
   let matteRemoved = 0;
+  let matteApplied = false;
   if (cfg.MATTE.enabled && cli.ai && detection) {
     try {
       const b = detection.box;
@@ -279,6 +281,7 @@ async function processImage(
       const matted = applyInstanceMatte(alpha, mask, width, height, cfg.ALPHA_THRESHOLD);
       alpha = matted.alpha;
       matteRemoved = matted.removedArea;
+      matteApplied = true;
     } catch (err) {
       console.warn(
         `  ⚠ ${file}: instance-matte overgeslagen: ${err instanceof Error ? err.message : err}`,
@@ -478,7 +481,8 @@ async function processImage(
       ? await anonymizePlates(composited, plates, cfg.CANVAS, cfg.PLATE, cfg.AI.plateText)
       : { image: composited, status: "off" as PlateStatus };
     plateStatus = anonymized.status;
-    outJpeg = await sharp(anonymized.image)
+    const branded = await applyBranding(anonymized.image, cfg.CANVAS, cfg.BRANDING);
+    outJpeg = await sharp(branded)
       .jpeg({ quality: cfg.JPEG_QUALITY })
       .toBuffer();
     const outName = path.parse(file).name + ".jpg";
@@ -507,7 +511,11 @@ async function processImage(
     await writeDebugOutput(
       file, inputPath, alpha, width, height, analysis, placement, warnings, cfg,
       {
-        maskImpl: detection ? "birefnet+carbox" : "birefnet",
+        maskImpl: matteApplied
+          ? "birefnet+sam2+carbox"
+          : detection
+            ? "birefnet+carbox"
+            : "birefnet",
         detectConfidence: detection ? Number(detection.confidence.toFixed(4)) : null,
         carBox: detection?.box ?? null,
         outsideBoxRemoved,
@@ -561,7 +569,9 @@ function printSummary(results: ImageResult[], cfg: Config): void {
   console.log(`auto-detect: ${maskStats.detectCalls} calls, ${maskStats.detectCacheHits} cache-hits`);
   console.log(`plaatdetect: ${aiStats.detectCalls} calls, ${aiStats.detectCacheHits} cache-hits`);
   console.log(`AI-checks:   ${aiStats.vlmCalls} calls, ${aiStats.vlmCacheHits} cache-hits`);
-  console.log(`ruit-segm.:  ${aiStats.segmentCalls} calls, ${aiStats.segmentCacheHits} cache-hits`);
+  console.log(
+    `SAM2-segm.:  ${aiStats.segmentCalls} calls, ${aiStats.segmentCacheHits} cache-hits (matte + ruiten)`,
+  );
 
   const byCode = new Map<string, string[]>();
   for (const r of results) {

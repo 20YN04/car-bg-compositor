@@ -135,18 +135,30 @@ function contactShadowSvg(
 ): Buffer {
   const s = cfg.SHADOW;
   const lightShift = -profile.lightDirX;
-  // strakker en donkerder dan de ambient: dit verankert de band visueel op
-  // de vloer en vangt de zachte maskertaper bij het contactpunt op
+  // zachte poel per wiel: donkerst op het contactpunt, radiaal uitvloeiend —
+  // geen harde ellipsrand. Dit verankert de band visueel op de vloer en
+  // vangt de zachte maskertaper bij het contactpunt op.
   const opacity = Math.min(0.7, s.opacity * 1.5);
+  const defs = contacts
+    .map(
+      (_, i) =>
+        `<radialGradient id="cs${i}" cx="50%" cy="50%" r="50%">` +
+        `<stop offset="0%" stop-color="black" stop-opacity="${opacity}"/>` +
+        `<stop offset="45%" stop-color="black" stop-opacity="${(opacity * 0.55).toFixed(3)}"/>` +
+        `<stop offset="100%" stop-color="black" stop-opacity="0"/>` +
+        `</radialGradient>`,
+    )
+    .join("");
   const shapes = contacts
     .map(
-      (c) =>
-        `<ellipse cx="${c.cx + lightShift * c.ry * 1.5}" cy="${c.cy}" rx="${c.rx}" ry="${c.ry}"` +
-        ` fill="black" fill-opacity="${opacity}"/>`,
+      (c, i) =>
+        `<ellipse cx="${c.cx + lightShift * c.ry * 1.5}" cy="${c.cy}" rx="${c.rx * 1.25}" ry="${c.ry * 1.4}"` +
+        ` fill="url(#cs${i})"/>`,
     )
     .join("");
   return Buffer.from(
-    `<svg width="${canvas.width}" height="${canvas.height}" xmlns="http://www.w3.org/2000/svg">${shapes}</svg>`,
+    `<svg width="${canvas.width}" height="${canvas.height}" xmlns="http://www.w3.org/2000/svg">` +
+      `<defs>${defs}</defs>${shapes}</svg>`,
   );
 }
 
@@ -199,9 +211,52 @@ export async function compositeImage(
   const { rgba, width, height, bbox, placement, backgroundPath } = input;
   const canvas = cfg.CANVAS;
 
-  const background = await sharp(backgroundPath)
+  const p = input.profile;
+  let bgPipe = sharp(backgroundPath)
     .resize(canvas.width, canvas.height, { fit: "cover" })
-    .removeAlpha()
+    .removeAlpha();
+  // toon: referentielook is een tikje donkerder/warmer — puur per-kanaal gain
+  if (p.toneBrightness !== 1 || p.toneWarmth !== 0) {
+    bgPipe = bgPipe.linear(
+      [
+        p.toneBrightness * (1 + p.toneWarmth),
+        p.toneBrightness,
+        p.toneBrightness * (1 - p.toneWarmth),
+      ],
+      [0, 0, 0],
+    );
+  }
+  // zachte gloed/hotspot achter de auto (screen) + lichte hoekvignette
+  const glowCx = placement.x + placement.width / 2;
+  const glowCy = input.contactY - placement.height * 0.45;
+  const atmosphere = Buffer.from(
+    `<svg width="${canvas.width}" height="${canvas.height}" xmlns="http://www.w3.org/2000/svg">` +
+      `<defs>` +
+      `<radialGradient id="glow" cx="50%" cy="50%" r="50%">` +
+      `<stop offset="0%" stop-color="white" stop-opacity="${p.glowStrength}"/>` +
+      `<stop offset="100%" stop-color="white" stop-opacity="0"/>` +
+      `</radialGradient>` +
+      `</defs>` +
+      `<ellipse cx="${glowCx}" cy="${glowCy}" rx="${placement.width * 0.85}" ry="${placement.height * 0.8}" fill="url(#glow)"/>` +
+      `</svg>`,
+  );
+  const vignette = Buffer.from(
+    `<svg width="${canvas.width}" height="${canvas.height}" xmlns="http://www.w3.org/2000/svg">` +
+      `<defs>` +
+      `<radialGradient id="vig" cx="50%" cy="46%" r="72%">` +
+      `<stop offset="0%" stop-color="black" stop-opacity="0"/>` +
+      `<stop offset="70%" stop-color="black" stop-opacity="0"/>` +
+      `<stop offset="100%" stop-color="black" stop-opacity="${p.vignetteStrength}"/>` +
+      `</radialGradient>` +
+      `</defs>` +
+      `<rect width="100%" height="100%" fill="url(#vig)"/>` +
+      `</svg>`,
+  );
+  const background = await bgPipe
+    .composite([
+      { input: atmosphere, blend: "screen" },
+      { input: vignette, blend: "multiply" },
+    ])
     .toBuffer();
 
   const contacts = input.contactShadows ?? [];
@@ -216,7 +271,7 @@ export async function compositeImage(
   const contactShadow =
     contacts.length > 0
       ? await sharp(contactShadowSvg(canvas, cfg, contacts, input.profile))
-          .blur(Math.max(3, cfg.SHADOW.blur * 0.3))
+          .blur(3)
           .png()
           .toBuffer()
       : null;
