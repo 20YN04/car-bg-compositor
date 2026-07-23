@@ -10,7 +10,8 @@ export type QACode =
   | "TOUCHES_EDGE"
   | "BAD_ASPECT"
   | "MULTIPLE_BLOBS"
-  | "OUT_OF_CANVAS";
+  | "OUT_OF_CANVAS"
+  | "STRAY_MASK_REMOVED";
 
 export interface QAWarning {
   code: QACode;
@@ -28,6 +29,7 @@ export function runQA(
   imgHeight: number,
   placement: Placement | null,
   cfg: Config,
+  cleanRemovedArea = 0,
 ): QAWarning[] {
   const warnings: QAWarning[] = [];
   const { bbox, area, blobCount } = analysis;
@@ -80,6 +82,14 @@ export function runQA(
     warnings.push({
       code: "MULTIPLE_BLOBS",
       message: `${blobCount} losse blobs in het masker — model heeft mogelijk iets anders opgepikt`,
+    });
+  }
+
+  if (cleanRemovedArea > 0 && cleanRemovedArea > 0.005 * (area + cleanRemovedArea)) {
+    const pct = ((cleanRemovedArea / (area + cleanRemovedArea)) * 100).toFixed(1);
+    warnings.push({
+      code: "STRAY_MASK_REMOVED",
+      message: `${pct}% van het masker was dun/losstaand materiaal en is opgeschoond — model pikte mogelijk iets anders op (paal, windmolen)`,
     });
   }
 

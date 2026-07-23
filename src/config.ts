@@ -12,6 +12,13 @@ export interface ShadowConfig {
   offsetY: number; // verschuiving t.o.v. GROUND_Y
 }
 
+export interface MaskCleanConfig {
+  enabled: boolean;
+  openRadiusRatio: number; // erosieradius als fractie van de beeldbreedte
+  minRadius: number;
+  maxRadius: number;
+}
+
 export interface QAConfig {
   minMaskArea: number; // fractie van het beeldoppervlak
   maxMaskArea: number;
@@ -36,6 +43,7 @@ export interface Config {
   ALPHA_THRESHOLD: number;
   GROUND_PERCENTILE: number;
   ERODE_MASK: boolean; // 1px erosie tegen kleurhalo's van de originele achtergrond
+  MASK_CLEAN: MaskCleanConfig; // opschoning: dunne/losstaande structuren (windmolen, paal) weg
   SHADOW: ShadowConfig;
   JPEG_QUALITY: number;
   QA: QAConfig;
@@ -50,6 +58,12 @@ export const defaultConfig: Config = {
   ALPHA_THRESHOLD: 10,
   GROUND_PERCENTILE: 0.95,
   ERODE_MASK: false,
+  MASK_CLEAN: {
+    enabled: true,
+    openRadiusRatio: 0.004, // ~8px bij 2048 breed: dunner dan ~16px verdwijnt
+    minRadius: 2,
+    maxRadius: 12,
+  },
   SHADOW: {
     widthRatio: 0.9,
     height: 80,

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   analyzeAlpha,
+  cleanAlpha,
   computeBBox,
   computeGroundLine,
   countBlobs,
@@ -124,6 +125,51 @@ describe("analyzeAlpha", () => {
     expect(result.bbox).toBeNull();
     expect(result.groundLine).toBeNull();
     expect(result.blobCount).toBe(0);
+  });
+});
+
+describe("cleanAlpha", () => {
+  it("verwijdert een dunne structuur die aan het object vastzit (windmolen-case)", () => {
+    const alpha = makeAlpha(300, 300);
+    // "auto": groot vlak
+    fillRect(alpha, 300, 50, 150, 249, 249);
+    // "windmolenmast": 4px brede verticale sliert, vast aan de bovenkant
+    fillRect(alpha, 300, 148, 20, 151, 150);
+    const { alpha: cleaned, removedArea } = cleanAlpha(alpha, 300, 300, 10, 4);
+    const { bbox } = computeBBox(cleaned, 300, 300, 10);
+    // de 130px lange mast is weg; op het aanhechtingspunt blijft hooguit een
+    // bumpje van enkele pixels staan (inherent aan morfologische opening)
+    expect(bbox!.top).toBeGreaterThanOrEqual(150 - 4);
+    expect(bbox!.left).toBe(50);
+    expect(bbox!.right).toBe(249);
+    expect(removedArea).toBeGreaterThan(4 * 100); // ~de volledige mast
+  });
+
+  it("verwijdert een losse blob ver van het hoofdobject", () => {
+    const alpha = makeAlpha(300, 300);
+    fillRect(alpha, 300, 50, 150, 249, 249);
+    fillRect(alpha, 300, 10, 10, 25, 25); // losstaand blokje
+    const { alpha: cleaned } = cleanAlpha(alpha, 300, 300, 10, 4);
+    const { bbox } = computeBBox(cleaned, 300, 300, 10);
+    expect(bbox).toEqual({ left: 50, top: 150, right: 249, bottom: 249 });
+  });
+
+  it("behoudt de originele (zachte) randwaarden van het hoofdobject", () => {
+    const alpha = makeAlpha(300, 300);
+    fillRect(alpha, 300, 50, 150, 249, 249);
+    // zachte rand: halfdoorzichtige pixelrij direct boven het vlak
+    fillRect(alpha, 300, 50, 149, 249, 149, 128);
+    const { alpha: cleaned } = cleanAlpha(alpha, 300, 300, 10, 4);
+    expect(cleaned[149 * 300 + 100]).toBe(128); // marge-dilatatie dekt de rand
+    expect(cleaned[200 * 300 + 100]).toBe(255);
+  });
+
+  it("doet niets wanneer alles zou wegeroderen", () => {
+    const alpha = makeAlpha(100, 100);
+    fillRect(alpha, 100, 40, 40, 44, 44); // 5×5: kleiner dan 2×radius
+    const { alpha: cleaned, removedArea } = cleanAlpha(alpha, 100, 100, 10, 4);
+    expect(removedArea).toBe(0);
+    expect(cleaned).toBe(alpha);
   });
 });
 

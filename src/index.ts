@@ -4,7 +4,7 @@ import { appendFile, mkdir, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import sharp from "sharp";
-import { analyzeAlpha, erodeAlpha, type AlphaAnalysis } from "./bbox.js";
+import { analyzeAlpha, cleanAlpha, erodeAlpha, type AlphaAnalysis } from "./bbox.js";
 import {
   compositeImage,
   computePlacement,
@@ -158,8 +158,21 @@ async function processImage(
 
   let alpha: Uint8Array = new Uint8Array(width * height);
   for (let i = 0; i < alpha.length; i++) alpha[i] = data[i * 4 + 3] ?? 0;
+
+  let cleanRemovedArea = 0;
+  if (cfg.MASK_CLEAN.enabled) {
+    const radius = Math.min(
+      cfg.MASK_CLEAN.maxRadius,
+      Math.max(cfg.MASK_CLEAN.minRadius, Math.round(width * cfg.MASK_CLEAN.openRadiusRatio)),
+    );
+    const cleaned = cleanAlpha(alpha, width, height, cfg.ALPHA_THRESHOLD, radius);
+    alpha = cleaned.alpha;
+    cleanRemovedArea = cleaned.removedArea;
+  }
   if (cfg.ERODE_MASK) {
     alpha = erodeAlpha(alpha, width, height);
+  }
+  if (cfg.MASK_CLEAN.enabled || cfg.ERODE_MASK) {
     for (let i = 0; i < alpha.length; i++) data[i * 4 + 3] = alpha[i] ?? 0;
   }
 
@@ -179,7 +192,7 @@ async function processImage(
       cfg.CAR_WIDTH_RATIO,
     );
   }
-  const warnings = runQA(analysis, width, height, placement, cfg);
+  const warnings = runQA(analysis, width, height, placement, cfg, cleanRemovedArea);
 
   if (analysis.bbox && placement) {
     const jpeg = await compositeImage(

@@ -51,6 +51,7 @@ draaien (bijv. tijdens het tunen van de compositing) kost geen API-credits.
 | `ALPHA_THRESHOLD` | vanaf welke alfawaarde een pixel als "auto" telt |
 | `GROUND_PERCENTILE` | robuustheid van de grondlijn; 0.95 negeert de laagste 5% kolommen (uitschieters zoals meegemaskte schaduw) |
 | `ERODE_MASK` | 1px erosie van het masker tegen kleurhalo's van de originele achtergrond |
+| `MASK_CLEAN` | opschoning via morfologische opening: dunne/losstaande mee-gemaskeerde structuren (windmolen, paal, lantaarn) verdwijnen, de autorand blijft onaangetast |
 | `SHADOW` | contactschaduw: breedte t.o.v. auto, hoogte, blur, dekking, offset |
 | `JPEG_QUALITY` | uitvoerkwaliteit |
 | `QA` | drempels voor de kwaliteitswaarschuwingen |
