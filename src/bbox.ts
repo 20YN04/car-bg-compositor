@@ -314,6 +314,79 @@ export function detectTopBump(
   return bestBump;
 }
 
+export interface ContactCluster {
+  x0: number; // eerste kolom (broncoördinaten)
+  x1: number; // laatste kolom
+  y: number; // laagste maskerpixel binnen de cluster
+}
+
+/**
+ * Vindt de wielcontact-zones: aaneengesloten kolomgroepen waarvan de
+ * onderkant (bijna) op de gecorrigeerde maskeronderkant ligt. Bij een
+ * 3/4-view liggen nabije en verre wielen op verschillende beeldhoogtes;
+ * elke cluster krijgt zijn eigen contactpunt zodat de schaduw per wiel
+ * getekend kan worden in plaats van als één vaste ellips.
+ */
+export function computeContactClusters(
+  alpha: Uint8Array,
+  width: number,
+  height: number,
+  bbox: BBox,
+  adjustedBottom: number,
+  threshold: number,
+): ContactCluster[] {
+  const bboxHeight = bbox.bottom - bbox.top + 1;
+  const bboxWidth = bbox.right - bbox.left + 1;
+  const contactDepth = Math.max(4, Math.round(bboxHeight * 0.04));
+  const contactMinY = adjustedBottom - contactDepth;
+  const maxGap = Math.max(2, Math.round(bboxWidth * 0.02));
+  const minClusterWidth = Math.max(3, Math.round(bboxWidth * 0.01));
+
+  // onderste contour per kolom, begrensd tot de gecorrigeerde onderkant
+  const bottoms: number[] = [];
+  const scanBottom = Math.min(bbox.bottom, adjustedBottom);
+  for (let x = bbox.left; x <= bbox.right; x++) {
+    let bottomY = -1;
+    for (let y = scanBottom; y >= bbox.top; y--) {
+      if ((alpha[y * width + x] ?? 0) > threshold) {
+        bottomY = y;
+        break;
+      }
+    }
+    bottoms.push(bottomY);
+  }
+
+  const clusters: ContactCluster[] = [];
+  let start = -1;
+  let gap = 0;
+  let lowest = -1;
+  const flush = (endIdx: number): void => {
+    if (start < 0) return;
+    const widthCols = endIdx - start + 1;
+    if (widthCols >= minClusterWidth) {
+      clusters.push({ x0: bbox.left + start, x1: bbox.left + endIdx, y: lowest });
+    }
+    start = -1;
+    gap = 0;
+    lowest = -1;
+  };
+  let lastContact = -1;
+  for (let i = 0; i < bottoms.length; i++) {
+    const isContact = bottoms[i]! >= contactMinY && bottoms[i]! >= 0;
+    if (isContact) {
+      if (start < 0) start = i;
+      lastContact = i;
+      gap = 0;
+      if (bottoms[i]! > lowest) lowest = bottoms[i]!;
+    } else if (start >= 0) {
+      gap++;
+      if (gap > maxGap) flush(lastContact);
+    }
+  }
+  flush(lastContact);
+  return clusters;
+}
+
 export function analyzeAlpha(
   alpha: Uint8Array,
   width: number,

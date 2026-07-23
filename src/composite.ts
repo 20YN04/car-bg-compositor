@@ -1,5 +1,5 @@
 import sharp from "sharp";
-import type { BBox } from "./bbox.js";
+import type { BBox, ContactCluster } from "./bbox.js";
 import type { CanvasSize, Config } from "./config.js";
 
 export interface Placement {
@@ -87,21 +87,65 @@ function plateSvg(canvas: CanvasSize, plates: CanvasRect[], text: string): Buffe
   );
 }
 
+export interface ShadowEllipse {
+  cx: number;
+  cy: number;
+  rx: number;
+  ry: number;
+}
+
+/**
+ * Contactschaduw per wielcontact-cluster: elke cluster krijgt een ellips op
+ * zijn eigen (geschaalde) contacthoogte, zodat bij een 3/4-view zowel het
+ * nabije als het verre wiel geaard oogt in plaats van te zweven boven één
+ * vaste ellips op GROUND_Y.
+ */
+export function buildContactShadows(
+  clusters: ContactCluster[],
+  bbox: BBox,
+  placement: Placement,
+  cfg: Config,
+): ShadowEllipse[] {
+  return clusters.map((c) => {
+    const centerX = (c.x0 + c.x1) / 2;
+    const clusterWidth = (c.x1 - c.x0 + 1) * placement.scale;
+    return {
+      cx: placement.x + (centerX - bbox.left) * placement.scale,
+      cy:
+        placement.y +
+        (c.y - bbox.top + 1) * placement.scale +
+        cfg.SHADOW.offsetY,
+      rx: (clusterWidth / 2) * 1.4,
+      ry: cfg.SHADOW.height * 0.35,
+    };
+  });
+}
+
 function shadowSvg(
   canvas: CanvasSize,
   placement: Placement,
   groundY: number,
   cfg: Config,
+  contacts: ShadowEllipse[],
 ): Buffer {
   const s = cfg.SHADOW;
   const cx = placement.x + placement.width / 2 + s.offsetX;
   const cy = groundY + s.offsetY;
   const rx = (placement.width * s.widthRatio) / 2;
   const ry = s.height / 2;
+  // met contactclusters wordt de brede ellips een zachte ambient-schaduw en
+  // dragen de clusters het eigenlijke contact; zonder clusters (fallback)
+  // blijft het oude gedrag: één ellips op volle sterkte
+  const ambientOpacity = contacts.length > 0 ? s.opacity * 0.55 : s.opacity;
+  const shapes = [
+    `<ellipse cx="${cx}" cy="${cy}" rx="${rx}" ry="${ry}" fill="black" fill-opacity="${ambientOpacity}"/>`,
+    ...contacts.map(
+      (c) =>
+        `<ellipse cx="${c.cx}" cy="${c.cy}" rx="${c.rx}" ry="${c.ry}" fill="black" fill-opacity="${s.opacity}"/>`,
+    ),
+  ].join("");
   return Buffer.from(
-    `<svg width="${canvas.width}" height="${canvas.height}" xmlns="http://www.w3.org/2000/svg">` +
-      `<ellipse cx="${cx}" cy="${cy}" rx="${rx}" ry="${ry}" fill="black" fill-opacity="${s.opacity}"/>` +
-      `</svg>`,
+    `<svg width="${canvas.width}" height="${canvas.height}" xmlns="http://www.w3.org/2000/svg">${shapes}</svg>`,
   );
 }
 
@@ -114,6 +158,7 @@ export interface CompositeInput {
   backgroundPath: string;
   plates?: CanvasRect[]; // nummerplaten in canvascoördinaten, overlay met plateText
   plateText?: string;
+  contactShadows?: ShadowEllipse[]; // per wielcontact, uit buildContactShadows
 }
 
 /** Composite: achtergrond → schaduw (multiply) → auto. Schrijft JPEG-bytes. */
@@ -129,7 +174,9 @@ export async function compositeImage(
     .removeAlpha()
     .toBuffer();
 
-  const shadow = await sharp(shadowSvg(canvas, placement, cfg.GROUND_Y, cfg))
+  const shadow = await sharp(
+    shadowSvg(canvas, placement, cfg.GROUND_Y, cfg, input.contactShadows ?? []),
+  )
     .blur(cfg.SHADOW.blur)
     .png()
     .toBuffer();

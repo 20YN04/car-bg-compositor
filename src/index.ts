@@ -7,6 +7,7 @@ import sharp from "sharp";
 import {
   analyzeAlpha,
   cleanAlpha,
+  computeContactClusters,
   erodeAlpha,
   restrictAlphaToBox,
   type AlphaAnalysis,
@@ -20,7 +21,7 @@ import {
 import { defaultConfig, type Config } from "./config.js";
 import { aiStats, detectPlates, visualYesNo } from "./ai.js";
 import { getCarBox, getCutout, maskStats } from "./mask.js";
-import { mapRectToCanvas, type CanvasRect } from "./composite.js";
+import { buildContactShadows, mapRectToCanvas, type CanvasRect } from "./composite.js";
 import { runQA, type QAWarning } from "./qa.js";
 
 const IN_DIR = "./in";
@@ -282,11 +283,19 @@ async function processImage(
   );
 
   let outJpeg: Buffer | null = null;
+  let contactClusterCount = 0;
   if (analysis.bbox && placement) {
+    const clusters = computeContactClusters(
+      alpha, width, height, analysis.bbox,
+      analysis.bbox.bottom - analysis.shadowBandHeight,
+      cfg.ALPHA_THRESHOLD,
+    );
+    contactClusterCount = clusters.length;
     outJpeg = await compositeImage(
       {
         rgba: data, width, height, bbox: analysis.bbox, placement, backgroundPath,
         plates, plateText: cfg.AI.plateText,
+        contactShadows: buildContactShadows(clusters, analysis.bbox, placement, cfg),
       },
       cfg,
     );
@@ -321,6 +330,7 @@ async function processImage(
         carBox: detection?.box ?? null,
         outsideBoxRemoved,
         plates: plates.length,
+        contactClusters: contactClusterCount,
       },
     );
   }

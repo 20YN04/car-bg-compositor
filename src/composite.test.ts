@@ -1,6 +1,17 @@
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import sharp from "sharp";
 import { describe, expect, it } from "vitest";
 import type { BBox } from "./bbox.js";
-import { computePlacement, mapRectToCanvas } from "./composite.js";
+import { defaultConfig, type Config } from "./config.js";
+import {
+  buildContactShadows,
+  compositeImage,
+  computePlacement,
+  generateDefaultBackground,
+  mapRectToCanvas,
+} from "./composite.js";
 
 const CANVAS = { width: 1920, height: 1440 };
 const GROUND_Y = 1200;
@@ -55,6 +66,64 @@ describe("computePlacement", () => {
     expect(pNormal.outOfCanvas).toBe(false);
   });
 
+  it("golden: wielcontact landt op GROUND_Y zonder zweefgap (echte compositing)", async () => {
+    // synthetische rode "auto": romp + twee wielen met contact op y=239
+    const srcW = 400;
+    const srcH = 300;
+    const rgba = Buffer.alloc(srcW * srcH * 4);
+    const paint = (x0: number, y0: number, x1: number, y1: number): void => {
+      for (let y = y0; y <= y1; y++) {
+        for (let x = x0; x <= x1; x++) {
+          const i = (y * srcW + x) * 4;
+          rgba[i] = 255; // puur rood, ondubbelzinnig t.o.v. achtergrond/schaduw
+          rgba[i + 3] = 255;
+        }
+      }
+    };
+    paint(100, 50, 299, 200); // romp
+    paint(130, 201, 170, 239); // wiel links
+    paint(230, 201, 270, 239); // wiel rechts
+
+    const bbox: BBox = { left: 100, top: 50, right: 299, bottom: 239 };
+    const groundLine = 239;
+    const cfg: Config = structuredClone(defaultConfig);
+    const placement = computePlacement(
+      bbox, groundLine, cfg.CANVAS, cfg.GROUND_Y, cfg.CAR_WIDTH_RATIO,
+    );
+
+    const dir = await mkdtemp(path.join(tmpdir(), "cbc-golden-"));
+    const bgPath = path.join(dir, "bg.png");
+    await generateDefaultBackground(bgPath, cfg.CANVAS);
+
+    const jpeg = await compositeImage(
+      { rgba, width: srcW, height: srcH, bbox, placement, backgroundPath: bgPath },
+      cfg,
+    );
+    const { data, info } = await sharp(jpeg)
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+
+    const isRed = (x: number, y: number): boolean => {
+      const i = (y * info.width + x) * info.channels;
+      return (data[i] ?? 0) > 150 && (data[i + 1] ?? 0) < 120;
+    };
+    // kolom door het midden van het linkerwiel, in canvascoördinaten
+    const wheelX = Math.round(placement.x + (150 - bbox.left) * placement.scale);
+    let lowestRed = -1;
+    for (let y = cfg.CANVAS.height - 1; y >= 0; y--) {
+      if (isRed(wheelX, y)) {
+        lowestRed = y;
+        break;
+      }
+    }
+    // de onderkant van het wiel (grondlijnrij) hoort op GROUND_Y-1 te liggen
+    // (de onderrand van die pixelrij raakt GROUND_Y); ±2px voor resize-afronding
+    expect(Math.abs(lowestRed - (cfg.GROUND_Y - 1))).toBeLessThanOrEqual(2);
+    // geen zweefgap: vlak boven het contact is het wiel aaneengesloten rood
+    expect(isRed(wheelX, lowestRed - 3)).toBe(true);
+    expect(isRed(wheelX, lowestRed - 10)).toBe(true);
+  });
+
   it("beeldt een bronrechthoek (nummerplaat) correct af op het canvas", () => {
     const bbox: BBox = { left: 100, top: 200, right: 899, bottom: 599 };
     const p = computePlacement(bbox, 599, CANVAS, GROUND_Y, RATIO);
@@ -67,6 +136,25 @@ describe("computePlacement", () => {
     // en het bbox-midden komt uit op het canvasmidden (horizontaal gecentreerd)
     const mid = mapRectToCanvas({ x: 500, y: 400, w: 0, h: 0 }, bbox, p);
     expect(mid.x).toBeCloseTo(1920 / 2);
+  });
+
+  it("zet een contactschaduw-cluster op de eigen geschaalde contacthoogte", () => {
+    const bbox: BBox = { left: 100, top: 50, right: 299, bottom: 240 };
+    const groundLine = 240;
+    const p = computePlacement(bbox, groundLine, CANVAS, GROUND_Y, RATIO);
+    const shadows = buildContactShadows(
+      [
+        { x0: 130, x1: 170, y: 240 }, // nabij wiel op de grondlijn
+        { x0: 230, x1: 270, y: 234 }, // ver wiel iets hoger
+      ],
+      bbox,
+      p,
+      defaultConfig,
+    );
+    // het nabije wiel (y = grondlijn) landt exact op GROUND_Y
+    expect(shadows[0]!.cy).toBeCloseTo(GROUND_Y + defaultConfig.SHADOW.offsetY);
+    // het verre wiel krijgt zijn schaduw hoger, met precies de geschaalde afstand
+    expect(GROUND_Y - shadows[1]!.cy + defaultConfig.SHADOW.offsetY).toBeCloseTo(6 * p.scale);
   });
 
   it("respecteert een aangepaste CAR_WIDTH_RATIO", () => {

@@ -3,6 +3,7 @@ import {
   analyzeAlpha,
   cleanAlpha,
   computeBBox,
+  computeContactClusters,
   computeGroundLine,
   countBlobs,
   detectTopBump,
@@ -270,6 +271,44 @@ describe("detectTopBump", () => {
     fillRect(alpha, 400, 120, 80, 300, 150); // cabine: 45% van de breedte hoger
     const bump = detectTopBump(alpha, 400, 300, computeBBox(alpha, 400, 300, 10).bbox!, 10);
     expect(bump).toBeNull(); // breder dan 30% van de bbox → geen "bult"
+  });
+});
+
+describe("computeContactClusters", () => {
+  it("vindt twee wielcontact-clusters bij een zijaanzicht", () => {
+    const alpha = makeAlpha(400, 300);
+    fillRect(alpha, 400, 100, 50, 299, 200); // romp
+    fillRect(alpha, 400, 130, 201, 170, 240); // wiel links
+    fillRect(alpha, 400, 230, 201, 270, 240); // wiel rechts
+    const { bbox } = computeBBox(alpha, 400, 300, 10);
+    const clusters = computeContactClusters(alpha, 400, 300, bbox!, bbox!.bottom, 10);
+    expect(clusters).toHaveLength(2);
+    expect(clusters[0]).toEqual({ x0: 130, x1: 170, y: 240 });
+    expect(clusters[1]).toEqual({ x0: 230, x1: 270, y: 240 });
+  });
+
+  it("geeft per cluster het eigen contactniveau (3/4-view: verre wiel hoger)", () => {
+    const alpha = makeAlpha(400, 300);
+    fillRect(alpha, 400, 100, 50, 299, 200);
+    fillRect(alpha, 400, 130, 201, 170, 240); // nabij wiel: y=240
+    fillRect(alpha, 400, 230, 201, 270, 234); // ver wiel: y=234 (binnen contactdiepte)
+    const { bbox } = computeBBox(alpha, 400, 300, 10);
+    const clusters = computeContactClusters(alpha, 400, 300, bbox!, bbox!.bottom, 10);
+    expect(clusters).toHaveLength(2);
+    expect(clusters[0]!.y).toBe(240);
+    expect(clusters[1]!.y).toBe(234);
+  });
+
+  it("negeert rijen onder de gecorrigeerde onderkant (schaduwband)", () => {
+    const alpha = makeAlpha(400, 300);
+    fillRect(alpha, 400, 100, 50, 299, 200);
+    fillRect(alpha, 400, 130, 201, 170, 240); // wielen
+    fillRect(alpha, 400, 230, 201, 270, 240);
+    fillRect(alpha, 400, 60, 241, 339, 270); // schaduwband eronder
+    const { bbox } = computeBBox(alpha, 400, 300, 10);
+    const clusters = computeContactClusters(alpha, 400, 300, bbox!, 240, 10);
+    expect(clusters).toHaveLength(2);
+    expect(clusters[0]!.y).toBe(240);
   });
 });
 
