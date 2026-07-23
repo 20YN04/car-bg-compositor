@@ -10,6 +10,8 @@ export interface AlphaAnalysis {
   groundLine: number | null; // y-coördinaat waarop de banden geacht worden te staan
   area: number; // aantal pixels boven de threshold
   blobCount: number; // losse componenten boven minBlobArea
+  shadowBandHeight: number; // onderste rijen genegeerd als uitwaaierende slagschaduw
+  topBump: { width: number; height: number } | null; // lokale bult boven de daklijn
 }
 
 export interface AnalyzeOptions {
@@ -59,10 +61,12 @@ export function computeGroundLine(
   bbox: BBox,
   threshold: number,
   percentile: number,
+  maxY: number = Number.MAX_SAFE_INTEGER,
 ): number {
   const bottoms: number[] = [];
+  const scanBottom = Math.min(bbox.bottom, maxY);
   for (let x = bbox.left; x <= bbox.right; x++) {
-    for (let y = bbox.bottom; y >= bbox.top; y--) {
+    for (let y = scanBottom; y >= bbox.top; y--) {
       if ((alpha[y * width + x] ?? 0) > threshold) {
         bottoms.push(y);
         break;
@@ -120,6 +124,196 @@ export function countBlobs(
   }
 }
 
+export interface RestrictResult {
+  alpha: Uint8Array;
+  removedArea: number; // pixels boven de threshold buiten de auto-box
+}
+
+/**
+ * Begrenst het alfamasker tot de gedetecteerde auto-box (implementatie B van
+ * instance-aware masking): alles buiten de box + marge gaat naar 0, en elke
+ * maskercomponent waarvan het zwaartepunt buiten de (ongemargede) box valt
+ * wordt volledig verworpen — ook het deel dat binnen de marge ligt.
+ */
+export function restrictAlphaToBox(
+  alpha: Uint8Array,
+  width: number,
+  height: number,
+  box: BBox,
+  marginFraction: number,
+  threshold: number,
+): RestrictResult {
+  const mx = Math.round((box.right - box.left + 1) * marginFraction);
+  const my = Math.round((box.bottom - box.top + 1) * marginFraction);
+  const left = Math.max(0, box.left - mx);
+  const right = Math.min(width - 1, box.right + mx);
+  const top = Math.max(0, box.top - my);
+  const bottom = Math.min(height - 1, box.bottom + my);
+
+  const out = new Uint8Array(alpha.length);
+  let removedArea = 0;
+  for (let y = 0; y < height; y++) {
+    const row = y * width;
+    const inside = y >= top && y <= bottom;
+    for (let x = 0; x < width; x++) {
+      const i = row + x;
+      if (inside && x >= left && x <= right) {
+        out[i] = alpha[i] ?? 0;
+      } else if ((alpha[i] ?? 0) > threshold) {
+        removedArea++;
+      }
+    }
+  }
+
+  // componenten met zwaartepunt buiten de eigenlijke box verwerpen
+  const visited = new Uint8Array(out.length);
+  const stack: number[] = [];
+  for (let i = 0; i < out.length; i++) {
+    if (visited[i] || (out[i] ?? 0) <= threshold) continue;
+    const component: number[] = [];
+    let sumX = 0;
+    let sumY = 0;
+    stack.push(i);
+    visited[i] = 1;
+    while (stack.length > 0) {
+      const idx = stack.pop()!;
+      component.push(idx);
+      const x = idx % width;
+      const y = (idx - x) / width;
+      sumX += x;
+      sumY += y;
+      for (const n of [
+        x > 0 ? idx - 1 : -1,
+        x < width - 1 ? idx + 1 : -1,
+        y > 0 ? idx - width : -1,
+        y < height - 1 ? idx + width : -1,
+      ]) {
+        if (n >= 0 && !visited[n] && (out[n] ?? 0) > threshold) {
+          visited[n] = 1;
+          stack.push(n);
+        }
+      }
+    }
+    const cx = sumX / component.length;
+    const cy = sumY / component.length;
+    if (cx < box.left || cx > box.right || cy < box.top || cy > box.bottom) {
+      for (const idx of component) out[idx] = 0;
+      removedArea += component.length;
+    }
+  }
+  return { alpha: out, removedArea };
+}
+
+export interface ShadowBandResult {
+  adjustedBottom: number;
+  bandHeight: number;
+}
+
+/**
+ * Vangnet tegen mee-gemaskeerde slagschaduw: wanneer de onderste maskerrijen
+ * abrupt breder zijn dan de mediane rompbreedte (uitwaaierende schaduw),
+ * worden die rijen genegeerd bij de grondlijnbepaling.
+ */
+export function rejectShadowBand(
+  alpha: Uint8Array,
+  width: number,
+  height: number,
+  bbox: BBox,
+  threshold: number,
+): ShadowBandResult {
+  const bboxHeight = bbox.bottom - bbox.top + 1;
+  const spans: number[] = [];
+  for (let y = bbox.top; y <= bbox.bottom; y++) {
+    let first = -1;
+    let last = -1;
+    const row = y * width;
+    for (let x = bbox.left; x <= bbox.right; x++) {
+      if ((alpha[row + x] ?? 0) > threshold) {
+        if (first < 0) first = x;
+        last = x;
+      }
+    }
+    spans.push(first < 0 ? 0 : last - first + 1);
+  }
+
+  const midStart = Math.floor(bboxHeight * 0.25);
+  const midEnd = Math.floor(bboxHeight * 0.75);
+  const bodySpans = spans.slice(midStart, midEnd + 1).sort((a, b) => a - b);
+  const bodyMedian = bodySpans[Math.floor(bodySpans.length / 2)] ?? 0;
+  if (bodyMedian === 0) return { adjustedBottom: bbox.bottom, bandHeight: 0 };
+
+  const maxBand = Math.floor(bboxHeight * 0.25); // veiligheidsgrens
+  let band = 0;
+  while (
+    band < maxBand &&
+    (spans[bboxHeight - 1 - band] ?? 0) > bodyMedian * 1.06
+  ) {
+    band++;
+  }
+  const minBand = Math.max(3, Math.round(bboxHeight * 0.015));
+  if (band < minBand) return { adjustedBottom: bbox.bottom, bandHeight: 0 };
+  return { adjustedBottom: bbox.bottom - band, bandHeight: band };
+}
+
+/**
+ * Detecteert een lokale bult in de bovencontour (bv. een aangeplakt wit
+ * busje-dak): een smalle groep kolommen waarvan de top significant boven de
+ * omliggende, gladde daklijn uitsteekt.
+ */
+export function detectTopBump(
+  alpha: Uint8Array,
+  width: number,
+  height: number,
+  bbox: BBox,
+  threshold: number,
+): { width: number; height: number } | null {
+  const bboxWidth = bbox.right - bbox.left + 1;
+  const bboxHeight = bbox.bottom - bbox.top + 1;
+  const tops: number[] = [];
+  for (let x = bbox.left; x <= bbox.right; x++) {
+    let topY = bbox.bottom + 1;
+    for (let y = bbox.top; y <= bbox.bottom; y++) {
+      if ((alpha[y * width + x] ?? 0) > threshold) {
+        topY = y;
+        break;
+      }
+    }
+    tops.push(topY);
+  }
+
+  // referentie: de globale mediaan-daklijn. Een "bult" is een smalle groep
+  // kolommen die daar significant bovenuit steekt; de cabine van de auto
+  // zelf is breed en valt daardoor buiten de breedtelimiet.
+  const sorted = [...tops].sort((a, b) => a - b);
+  const median = sorted[Math.floor(sorted.length / 2)] ?? bbox.top;
+  const minDeviation = Math.max(6, bboxHeight * 0.05);
+  const maxBumpWidth = Math.floor(bboxWidth * 0.3);
+
+  let bestBump: { width: number; height: number } | null = null;
+  let runStart = -1;
+  let runMaxDev = 0;
+  const flush = (end: number): void => {
+    if (runStart < 0) return;
+    const runWidth = end - runStart;
+    if (runWidth <= maxBumpWidth && (!bestBump || runMaxDev > bestBump.height)) {
+      bestBump = { width: runWidth, height: Math.round(runMaxDev) };
+    }
+    runStart = -1;
+    runMaxDev = 0;
+  };
+  for (let i = 0; i < tops.length; i++) {
+    const deviation = median - tops[i]!; // >0: kolom steekt boven de daklijn uit
+    if (deviation > minDeviation) {
+      if (runStart < 0) runStart = i;
+      if (deviation > runMaxDev) runMaxDev = deviation;
+    } else {
+      flush(i);
+    }
+  }
+  flush(tops.length);
+  return bestBump;
+}
+
 export function analyzeAlpha(
   alpha: Uint8Array,
   width: number,
@@ -127,8 +321,18 @@ export function analyzeAlpha(
   opts: AnalyzeOptions,
 ): AlphaAnalysis {
   const { bbox, area } = computeBBox(alpha, width, height, opts.threshold);
-  if (!bbox) return { bbox: null, groundLine: null, area: 0, blobCount: 0 };
+  if (!bbox) {
+    return {
+      bbox: null,
+      groundLine: null,
+      area: 0,
+      blobCount: 0,
+      shadowBandHeight: 0,
+      topBump: null,
+    };
+  }
 
+  const shadowBand = rejectShadowBand(alpha, width, height, bbox, opts.threshold);
   const groundLine = computeGroundLine(
     alpha,
     width,
@@ -136,6 +340,7 @@ export function analyzeAlpha(
     bbox,
     opts.threshold,
     opts.groundPercentile,
+    shadowBand.adjustedBottom,
   );
   const blobCount = countBlobs(
     alpha,
@@ -144,7 +349,15 @@ export function analyzeAlpha(
     opts.threshold,
     opts.minBlobArea,
   );
-  return { bbox, groundLine, area, blobCount };
+  const topBump = detectTopBump(alpha, width, height, bbox, opts.threshold);
+  return {
+    bbox,
+    groundLine,
+    area,
+    blobCount,
+    shadowBandHeight: shadowBand.bandHeight,
+    topBump,
+  };
 }
 
 export interface CleanResult {

@@ -36,6 +36,19 @@ export interface FalConfig {
   refineForeground: boolean;
 }
 
+export interface DetectConfig {
+  enabled: boolean;
+  modelId: string;
+  prompt: string;
+  /**
+   * Drempel voor de heuristische detectiescore (oppervlak × centraliteit,
+   * 0–1). Florence-2 geeft geen modelconfidence terug; deze score is onze
+   * eigen maat voor "dit is dé auto van deze listing-foto".
+   */
+  minConfidence: number;
+  boxMargin: number; // marge rond de auto-box als fractie van de boxmaat
+}
+
 export interface AiConfig {
   enabled: boolean;
   plateText: string; // tekst op de vervangende nummerplaat
@@ -57,6 +70,7 @@ export interface Config {
   JPEG_QUALITY: number;
   QA: QAConfig;
   FAL: FalConfig;
+  DETECT: DetectConfig;
   AI: AiConfig;
   COST_PER_CALL_USD: number;
 }
@@ -97,6 +111,20 @@ export const defaultConfig: Config = {
     operatingResolution: "2048x2048",
     outputFormat: "png",
     refineForeground: true,
+  },
+  /**
+   * Instance-aware masking (implementatie B): BiRefNet blijft het masker
+   * leveren (zachte hoge-resolutie matting-randen — dat haalt SAM2's binaire
+   * masker niet), maar het alfamasker wordt begrensd tot de gedetecteerde
+   * auto-box. Zo verdwijnen mee-gemaskeerde slagschaduw op de grond en
+   * aanpalende achtergrondobjecten (busje-dak) structureel.
+   */
+  DETECT: {
+    enabled: true,
+    modelId: "fal-ai/florence-2-large/open-vocabulary-detection",
+    prompt: "car",
+    minConfidence: 0.05,
+    boxMargin: 0.02,
   },
   AI: {
     enabled: true,

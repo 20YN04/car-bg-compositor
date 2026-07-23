@@ -5,7 +5,10 @@ import {
   computeBBox,
   computeGroundLine,
   countBlobs,
+  detectTopBump,
   erodeAlpha,
+  rejectShadowBand,
+  restrictAlphaToBox,
 } from "./bbox.js";
 
 const OPTS = { threshold: 10, groundPercentile: 0.95, minBlobArea: 0.005 };
@@ -170,6 +173,103 @@ describe("cleanAlpha", () => {
     const { alpha: cleaned, removedArea } = cleanAlpha(alpha, 100, 100, 10, 4);
     expect(removedArea).toBe(0);
     expect(cleaned).toBe(alpha);
+  });
+});
+
+describe("restrictAlphaToBox", () => {
+  const box = { left: 50, top: 100, right: 249, bottom: 249 };
+
+  it("verwijdert maskerpixels buiten de auto-box (slagschaduw onder de box)", () => {
+    const alpha = makeAlpha(300, 300);
+    fillRect(alpha, 300, 50, 100, 249, 249); // auto binnen box
+    fillRect(alpha, 300, 30, 250, 280, 280); // brede schaduw onder de box, vast aan de auto
+    const { alpha: out, removedArea } = restrictAlphaToBox(alpha, 300, 300, box, 0.02, 10);
+    const { bbox } = computeBBox(out, 300, 300, 10);
+    expect(bbox!.bottom).toBeLessThanOrEqual(252); // 249 + 2% marge
+    expect(removedArea).toBeGreaterThan(0);
+  });
+
+  it("verwerpt componenten met zwaartepunt buiten de box, ook binnen de marge", () => {
+    const alpha = makeAlpha(300, 300);
+    fillRect(alpha, 300, 50, 100, 249, 249); // auto
+    // losstaand object dat nét binnen de marge begint maar er grotendeels buiten ligt
+    fillRect(alpha, 300, 251, 100, 254, 140);
+    const { alpha: out } = restrictAlphaToBox(alpha, 300, 300, box, 0.02, 10);
+    const { bbox } = computeBBox(out, 300, 300, 10);
+    expect(bbox!.right).toBe(249);
+  });
+
+  it("laat een masker dat volledig in de box ligt ongemoeid", () => {
+    const alpha = makeAlpha(300, 300);
+    fillRect(alpha, 300, 60, 110, 240, 240);
+    const { alpha: out, removedArea } = restrictAlphaToBox(alpha, 300, 300, box, 0.02, 10);
+    expect(removedArea).toBe(0);
+    expect(computeBBox(out, 300, 300, 10).bbox).toEqual({
+      left: 60, top: 110, right: 240, bottom: 240,
+    });
+  });
+});
+
+describe("rejectShadowBand", () => {
+  it("negeert onderste rijen die breder zijn dan de romp (uitwaaierende schaduw)", () => {
+    const alpha = makeAlpha(400, 300);
+    fillRect(alpha, 400, 100, 50, 299, 200); // romp: 200 breed
+    fillRect(alpha, 400, 40, 201, 359, 230); // schaduw: 320 breed, onderaan
+    const { bbox } = computeBBox(alpha, 400, 300, 10);
+    const result = rejectShadowBand(alpha, 400, 300, bbox!, 10);
+    expect(result.bandHeight).toBe(30);
+    expect(result.adjustedBottom).toBe(200);
+    // en de grondlijn gebruikt de gecorrigeerde onderkant
+    const ground = computeGroundLine(alpha, 400, 300, bbox!, 10, 0.95, result.adjustedBottom);
+    expect(ground).toBe(200);
+  });
+
+  it("doet niets bij een normaal masker (banden smaller dan de romp)", () => {
+    const alpha = makeAlpha(400, 300);
+    fillRect(alpha, 400, 100, 50, 299, 200); // romp
+    fillRect(alpha, 400, 130, 201, 170, 240); // wiel links
+    fillRect(alpha, 400, 230, 201, 270, 240); // wiel rechts
+    const { bbox } = computeBBox(alpha, 400, 300, 10);
+    const result = rejectShadowBand(alpha, 400, 300, bbox!, 10);
+    expect(result.bandHeight).toBe(0);
+    expect(result.adjustedBottom).toBe(bbox!.bottom);
+  });
+
+  it("verwijdert nooit meer dan 25% van de bbox-hoogte", () => {
+    const alpha = makeAlpha(400, 400);
+    fillRect(alpha, 400, 150, 50, 249, 150); // smalle romp
+    fillRect(alpha, 400, 20, 151, 379, 350); // extreem hoge brede blob eronder
+    const { bbox } = computeBBox(alpha, 400, 400, 10);
+    const result = rejectShadowBand(alpha, 400, 400, bbox!, 10);
+    const bboxHeight = bbox!.bottom - bbox!.top + 1;
+    expect(result.bandHeight).toBeLessThanOrEqual(Math.floor(bboxHeight * 0.25));
+  });
+});
+
+describe("detectTopBump", () => {
+  it("detecteert een smalle bult boven de daklijn (busje-dak-case)", () => {
+    const alpha = makeAlpha(400, 300);
+    fillRect(alpha, 400, 50, 100, 349, 250); // auto met vlakke daklijn op y=100
+    fillRect(alpha, 400, 120, 60, 160, 100); // bult: 41 kolommen, 40px hoger
+    const bump = detectTopBump(alpha, 400, 300, computeBBox(alpha, 400, 300, 10).bbox!, 10);
+    expect(bump).not.toBeNull();
+    expect(bump!.height).toBeGreaterThanOrEqual(30);
+    expect(bump!.width).toBeLessThanOrEqual(60);
+  });
+
+  it("negeert een gladde daklijn zonder bult", () => {
+    const alpha = makeAlpha(400, 300);
+    fillRect(alpha, 400, 50, 100, 349, 250);
+    const bump = detectTopBump(alpha, 400, 300, computeBBox(alpha, 400, 300, 10).bbox!, 10);
+    expect(bump).toBeNull();
+  });
+
+  it("negeert een brede geleidelijke verhoging (cabine van de auto zelf)", () => {
+    const alpha = makeAlpha(400, 300);
+    fillRect(alpha, 400, 50, 150, 349, 250); // motorkap/romp
+    fillRect(alpha, 400, 120, 80, 300, 150); // cabine: 45% van de breedte hoger
+    const bump = detectTopBump(alpha, 400, 300, computeBBox(alpha, 400, 300, 10).bbox!, 10);
+    expect(bump).toBeNull(); // breder dan 30% van de bbox → geen "bult"
   });
 });
 

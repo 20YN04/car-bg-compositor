@@ -4,7 +4,13 @@ import { appendFile, mkdir, readdir, readFile, writeFile } from "node:fs/promise
 import path from "node:path";
 import { parseArgs } from "node:util";
 import sharp from "sharp";
-import { analyzeAlpha, cleanAlpha, erodeAlpha, type AlphaAnalysis } from "./bbox.js";
+import {
+  analyzeAlpha,
+  cleanAlpha,
+  erodeAlpha,
+  restrictAlphaToBox,
+  type AlphaAnalysis,
+} from "./bbox.js";
 import {
   compositeImage,
   computePlacement,
@@ -13,7 +19,7 @@ import {
 } from "./composite.js";
 import { defaultConfig, type Config } from "./config.js";
 import { aiStats, detectPlates, visualYesNo } from "./ai.js";
-import { getCutout, maskStats } from "./mask.js";
+import { getCarBox, getCutout, maskStats } from "./mask.js";
 import { mapRectToCanvas, type CanvasRect } from "./composite.js";
 import { runQA, type QAWarning } from "./qa.js";
 
@@ -30,6 +36,7 @@ interface CliOptions {
   useCache: boolean;
   debug: boolean;
   ai: boolean;
+  detect: boolean;
 }
 
 const MASK_PROMPT =
@@ -53,6 +60,7 @@ function parseCli(): { cfg: Config; cli: CliOptions } {
       "no-cache": { type: "boolean", default: false },
       "no-debug": { type: "boolean", default: false },
       "no-ai": { type: "boolean", default: false },
+      "no-detect": { type: "boolean", default: false },
     },
   });
 
@@ -75,6 +83,7 @@ function parseCli(): { cfg: Config; cli: CliOptions } {
       useCache: !values["no-cache"],
       debug: !values["no-debug"],
       ai: !values["no-ai"],
+      detect: !values["no-detect"],
     },
   };
 }
@@ -113,6 +122,7 @@ async function writeDebugOutput(
   placement: Placement | null,
   warnings: QAWarning[],
   cfg: Config,
+  extras: Record<string, unknown> = {},
 ): Promise<void> {
   const base = path.parse(file).name;
 
@@ -152,7 +162,10 @@ async function writeDebugOutput(
     scale: placement?.scale ?? null,
     position: placement ? { x: placement.x, y: placement.y } : null,
     groundY: cfg.GROUND_Y,
+    shadowBandHeight: analysis.shadowBandHeight,
+    topBump: analysis.topBump,
     qa: warnings.map((w) => w.code),
+    ...extras,
   };
   await appendFile(RUN_LOG, `${JSON.stringify(line)}\n`);
 }
@@ -164,6 +177,12 @@ async function processImage(
   cli: CliOptions,
 ): Promise<ImageResult> {
   const inputPath = path.join(IN_DIR, file);
+
+  const useDetect = cfg.DETECT.enabled && cli.detect;
+  const detection = useDetect
+    ? await getCarBox(inputPath, CACHE_DIR, cfg.DETECT, cli.useCache)
+    : null;
+
   const cutout = await getCutout(inputPath, CACHE_DIR, cfg.FAL, cli.useCache);
 
   const { data, info } = await sharp(cutout)
@@ -174,6 +193,16 @@ async function processImage(
 
   let alpha: Uint8Array = new Uint8Array(width * height);
   for (let i = 0; i < alpha.length; i++) alpha[i] = data[i * 4 + 3] ?? 0;
+
+  // instance-aware masking (implementatie B): masker begrenzen tot de auto-box
+  let outsideBoxRemoved = 0;
+  if (detection) {
+    const restricted = restrictAlphaToBox(
+      alpha, width, height, detection.box, cfg.DETECT.boxMargin, cfg.ALPHA_THRESHOLD,
+    );
+    alpha = restricted.alpha;
+    outsideBoxRemoved = restricted.removedArea;
+  }
 
   let cleanRemovedArea = 0;
   if (cfg.MASK_CLEAN.enabled) {
@@ -188,7 +217,7 @@ async function processImage(
   if (cfg.ERODE_MASK) {
     alpha = erodeAlpha(alpha, width, height);
   }
-  if (cfg.MASK_CLEAN.enabled || cfg.ERODE_MASK) {
+  if (detection || cfg.MASK_CLEAN.enabled || cfg.ERODE_MASK) {
     for (let i = 0; i < alpha.length; i++) data[i * 4 + 3] = alpha[i] ?? 0;
   }
 
@@ -208,11 +237,10 @@ async function processImage(
       cfg.CAR_WIDTH_RATIO,
     );
   }
-  const warnings = runQA(analysis, width, height, placement, cfg, cleanRemovedArea);
-
   // nummerplaten detecteren en mappen naar canvascoördinaten
   let plates: CanvasRect[] = [];
-  if (cfg.AI.enabled && cli.ai && analysis.bbox && placement) {
+  const plateEnabled = cfg.AI.enabled && cli.ai && analysis.bbox !== null && placement !== null;
+  if (plateEnabled && analysis.bbox && placement) {
     const inputBytes = await readFile(inputPath);
     const detected = await detectPlates(inputBytes, CACHE_DIR, cfg.AI, cli.useCache);
     plates = detected
@@ -234,13 +262,24 @@ async function processImage(
       }))
       .map((p) => mapRectToCanvas(p, analysis.bbox!, placement!))
       .filter((r) => r.width >= 8 && r.height >= 4);
-    if (plates.length === 0) {
-      warnings.push({
-        code: "PLATE_NOT_FOUND",
-        message: `geen nummerplaat op de auto gedetecteerd — geen ${cfg.AI.plateText}-overlay geplaatst`,
-      });
-    }
   }
+
+  const warnings = runQA(
+    {
+      analysis,
+      imgWidth: width,
+      imgHeight: height,
+      placement,
+      cleanRemovedArea,
+      detection: {
+        enabled: useDetect,
+        found: detection !== null,
+        outsideBoxRemoved,
+      },
+      plate: { enabled: plateEnabled, found: plates.length > 0 },
+    },
+    cfg,
+  );
 
   let outJpeg: Buffer | null = null;
   if (analysis.bbox && placement) {
@@ -276,6 +315,13 @@ async function processImage(
   if (cli.debug) {
     await writeDebugOutput(
       file, inputPath, alpha, width, height, analysis, placement, warnings, cfg,
+      {
+        maskImpl: detection ? "birefnet+carbox" : "birefnet",
+        detectConfidence: detection ? Number(detection.confidence.toFixed(4)) : null,
+        carBox: detection?.box ?? null,
+        outsideBoxRemoved,
+        plates: plates.length,
+      },
     );
   }
 
@@ -296,6 +342,7 @@ function printSummary(results: ImageResult[], cfg: Config): void {
     for (const f of failed) console.log(`  ✗ ${f.file}: ${f.error}`);
   }
   console.log(`BiRefNet:    ${maskStats.apiCalls} calls, ${maskStats.cacheHits} cache-hits`);
+  console.log(`auto-detect: ${maskStats.detectCalls} calls, ${maskStats.detectCacheHits} cache-hits`);
   console.log(`plaatdetect: ${aiStats.detectCalls} calls, ${aiStats.detectCacheHits} cache-hits`);
   console.log(`AI-checks:   ${aiStats.vlmCalls} calls, ${aiStats.vlmCacheHits} cache-hits`);
 
@@ -318,11 +365,13 @@ function printSummary(results: ImageResult[], cfg: Config): void {
 
   const runCost =
     maskStats.apiCalls * cfg.COST_PER_CALL_USD +
+    maskStats.detectCalls * cfg.AI.costPerDetection +
     aiStats.detectCalls * cfg.AI.costPerDetection +
     aiStats.vlmCalls * cfg.AI.costPerQuery;
-  const perImage = cfg.AI.enabled
-    ? cfg.COST_PER_CALL_USD + cfg.AI.costPerDetection + 2 * cfg.AI.costPerQuery
-    : cfg.COST_PER_CALL_USD;
+  const perImage =
+    cfg.COST_PER_CALL_USD +
+    (cfg.DETECT.enabled ? cfg.AI.costPerDetection : 0) +
+    (cfg.AI.enabled ? cfg.AI.costPerDetection + 2 * cfg.AI.costPerQuery : 0);
   const monthly = 75_000 * perImage;
   console.log(
     `\nkosten: $${runCost.toFixed(4)} deze run ` +
