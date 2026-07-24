@@ -450,19 +450,18 @@ export const defaultConfig: Config = {
     costPerCall: 0.02,
     backgroundPath: "backgrounds/showroom_bg.png",
     showroomPrompt:
-      "Take the car from the FIRST image and place it into the grey studio " +
-      "shown in the SECOND image. The remaining images (3-6) are reference " +
-      "examples showing the desired result — match their positioning, scale, " +
-      "lighting, and shadow exactly.\n\n" +
-      "POSITIONING: Car centered on polished concrete floor, soft contact " +
-      "shadow under tires, subtle floor reflection. Studio like an aircraft " +
-      "hangar — ≥6m between car and back wall, ≥30% image height of empty " +
-      "floor behind car. Camera ~1.7m slightly tilted down.\n\n" +
-      "CAR: Match source camera angle exactly. Preserve original paint, " +
-      "wheels, rims, badges, headlights. Do NOT alter the car. Replace only " +
-      "reflections (swap trees/sky for grey studio). Windows = dark tinted.\n\n" +
-      "OUTPUT: Photorealistic studio photo. No extra cars, people, text, " +
-      "watermarks. 8:5 aspect ratio.",
+      "The first image shows a car on a white background, already at the " +
+      "correct size and position for the scene. Place this car into the grey " +
+      "photo studio shown in the SECOND image (which is already attached).\n\n" +
+      "CRITICAL: Do NOT resize, stretch, or squish the car. It is already " +
+      "exactly the right size. Only move it down so the wheels rest on the " +
+      "polished concrete floor. Keep the car centered horizontally.\n\n" +
+      "Add a soft dark contact shadow directly under the tires, and a subtle " +
+      "dark reflection of the car on the concrete floor.\n\n" +
+      "Do NOT change the background wall, floor, or lighting. Do NOT alter " +
+      "the car — keep original paint, wheels, rims, badges, headlights. " +
+      "Replace any outdoor reflections in the paint with grey studio.\n\n" +
+      "Output: photorealistic studio photo. No text, no watermarks.",
   },
   PRESETS: {
     side: { spanMeters: 4.3 },
