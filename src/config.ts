@@ -79,7 +79,9 @@ export interface WindowsConfig {
    * reflecties blijven subtiel zichtbaar, geen generatieve bewerking.
    */
   enabled: boolean;
-  detectPrompt: string;
+  /** Aparte korte prompts werken beter dan één lange caption: Florence
+   * ground-t een lange zin ook op "the car" en geeft dan full-frame boxes. */
+  detectPrompts: string[];
   segmentModelId: string;
   tintOpacity: number; // 0..1: hoe sterk richting tintColor
   tintColor: { r: number; g: number; b: number };
@@ -114,6 +116,19 @@ export interface HarmonizeConfig {
   enabled: boolean;
   strength: number; // 0..1: hoe ver richting de achtergrondtoon
   maxGain: number; // cap op de per-kanaal gain-afwijking (bv. 0.12 = ±12%)
+}
+
+export interface HighlightConfig {
+  /**
+   * Specular-compressie: dempt de felle reflecties van de oorspronkelijke
+   * omgeving (tl-balken, spots) in de lak via een soft-knee curve op de
+   * luminantie boven `knee`. `strength` = fractie van het exces dat
+   * weggenomen wordt (0.6 → spikkel op 255 zakt naar knee + 40% van het
+   * exces). Normale lakverlopen onder de knee blijven exact gelijk.
+   */
+  enabled: boolean;
+  knee: number; // 0..255
+  strength: number; // 0..1
 }
 
 export type AnglePreset = "side" | "front34" | "rear34";
@@ -177,6 +192,7 @@ export interface Config {
   PLATE: PlateConfig;
   WINDOWS: WindowsConfig;
   BRANDING: BrandingConfig;
+  HIGHLIGHTS: HighlightConfig; // specular-compressie op de autolaag
   BACKGROUND_PROFILES: Record<string, BackgroundProfile>; // key = bestandsnaam
   DEFAULT_PROFILE: BackgroundProfile;
   HARMONIZE: HarmonizeConfig;
@@ -320,6 +336,11 @@ export const defaultConfig: Config = {
     strength: 0.35,
     maxGain: 0.12,
   },
+  HIGHLIGHTS: {
+    enabled: true,
+    knee: 200, // ondergrens; schuift adaptief mee met de autohelderheid
+    strength: 0.75,
+  },
   PRESETS: {
     side: { spanMeters: 4.3 },
     front34: { spanMeters: 4.6 },
@@ -327,9 +348,9 @@ export const defaultConfig: Config = {
   },
   WINDOWS: {
     enabled: true,
-    detectPrompt: "car window",
+    detectPrompts: ["car window", "windshield"],
     segmentModelId: "fal-ai/sam2/image",
-    tintOpacity: 0.45,
+    tintOpacity: 0.68,
     tintColor: { r: 35, g: 40, b: 48 },
     featherSigma: 5,
   },

@@ -69,6 +69,7 @@ draaien (bijv. tijdens het tunen van de compositing) kost geen API-credits.
 | `MATTE` | instance-matte: BiRefNet-alfa begrensd met een SAM2-instancemasker (auto-box als prompt) — scherpe wielranden, geen aangesmolten grondschaduw |
 | `BACKGROUND_PROFILES` | kalibratie per achtergrond-plate: `contactTargetY` (vloerlijn), `floorScaleRef` (px/m), lichtrichting/zachtheid, vloerreflectiviteit. **Belangrijk:** de camerahoogte/-hoek van de plate moet bij de auto-shots passen; willekeurige plates werken niet — een mismatch is een plate-keuzeprobleem, geen codebug |
 | `HARMONIZE` | kleur/belichting van de auto subtiel richting de achtergrondtoon (per-kanaal gains met cap) — puur curves, geen generatieve stap |
+| `HIGHLIGHTS` | specular-compressie: dempt felle reflecties van de oorspronkelijke omgeving (tl-balken, spots) in de lak via een soft-knee curve; de knee schuift adaptief mee met de autohelderheid zodat een witte auto niet afvlakt |
 | `PRESETS` | per-hoek kadrering (side/front34/rear34): eigen spanwijdte en optioneel contactlijn |
 | `MONTHLY_VOLUME` | beeldvolume voor de kostenextrapolatie (default 75.000) |
 | `COST_PER_CALL_USD` | prijs per API-call voor de kostenschatting — ijken op het fal-dashboard |

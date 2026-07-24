@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cutoutMeans, harmonizeColors } from "./harmonize.js";
+import { compressHighlights, cutoutMeans, harmonizeColors } from "./harmonize.js";
 
 const CFG = { enabled: true, strength: 0.35, maxGain: 0.12 };
 
@@ -58,5 +58,66 @@ describe("harmonizeColors", () => {
     const car = cutoutMeans(rgba, alpha, 4, 4);
     harmonizeColors(rgba, alpha, 4, 4, car, { r: 180, g: 180, b: 180 }, CFG);
     expect(rgba[5 * 4]).toBe(before);
+  });
+});
+
+describe("compressHighlights", () => {
+  const cfg = { enabled: true, knee: 200, strength: 0.5 };
+
+  /** 10×10 grijze auto (150) met één felle spikkel op index 0. */
+  function speckledCar(speckle: [number, number, number], bodyAlpha = 255) {
+    const n = 100;
+    const rgba = Buffer.alloc(n * 4);
+    const alpha = new Uint8Array(n).fill(bodyAlpha);
+    for (let i = 0; i < n; i++) {
+      rgba[i * 4] = 150;
+      rgba[i * 4 + 1] = 150;
+      rgba[i * 4 + 2] = 150;
+      rgba[i * 4 + 3] = 255;
+    }
+    rgba[0] = speckle[0];
+    rgba[1] = speckle[1];
+    rgba[2] = speckle[2];
+    return { rgba, alpha };
+  }
+
+  it("comprimeert alleen de spikkel en behoudt de hue-verhouding", () => {
+    const { rgba, alpha } = speckledCar([250, 240, 230]);
+    const touched = compressHighlights(rgba, alpha, 10, 10, cfg);
+    expect(touched).toBe(1);
+    // mean max ≈ 151 → adaptieve knee blijft op de ondergrens 200;
+    // max 250 → 200 + 50*0.5 = 225; alle kanalen schalen met 225/250
+    expect(rgba[0]).toBe(225);
+    expect(rgba[1]).toBe(216);
+    expect(rgba[2]).toBe(207);
+    // carrosserie onder de knee: exact onaangetast
+    expect(rgba[4]).toBe(150);
+  });
+
+  it("schuift de knee mee op een witte auto (geen afvlakking)", () => {
+    const n = 100;
+    const rgba = Buffer.alloc(n * 4);
+    const alpha = new Uint8Array(n).fill(255);
+    for (let i = 0; i < n; i++) {
+      rgba[i * 4] = 235;
+      rgba[i * 4 + 1] = 235;
+      rgba[i * 4 + 2] = 235;
+      rgba[i * 4 + 3] = 255;
+    }
+    // mean max = 235 → knee 270 → niets boven de knee
+    expect(compressHighlights(rgba, alpha, 10, 10, cfg)).toBe(0);
+    expect(rgba[0]).toBe(235);
+  });
+
+  it("slaat transparante pixels over", () => {
+    const { rgba, alpha } = speckledCar([255, 255, 255], 0);
+    expect(compressHighlights(rgba, alpha, 10, 10, cfg)).toBe(0);
+    expect(rgba[0]).toBe(255);
+  });
+
+  it("doet niets wanneer uitgeschakeld", () => {
+    const { rgba, alpha } = speckledCar([255, 255, 255]);
+    expect(compressHighlights(rgba, alpha, 10, 10, { ...cfg, enabled: false })).toBe(0);
+    expect(rgba[0]).toBe(255);
   });
 });

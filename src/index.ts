@@ -43,7 +43,12 @@ import {
   type PlateStatus,
   type PlateTarget,
 } from "./plate.js";
-import { backgroundMeans, cutoutMeans, harmonizeColors } from "./harmonize.js";
+import {
+  backgroundMeans,
+  compressHighlights,
+  cutoutMeans,
+  harmonizeColors,
+} from "./harmonize.js";
 import { applyBranding } from "./branding.js";
 import { runQA, type QAWarning } from "./qa.js";
 
@@ -381,6 +386,12 @@ async function processImage(
     const car = cutoutMeans(data, alpha, width, height);
     harmonizeGains = harmonizeColors(data, alpha, width, height, car, bg, cfg.HARMONIZE);
   }
+  // specular-compressie: felle reflecties van de oorspronkelijke tl-balken/
+  // spots in de lak dempen zodat ze niet vloeken met de rustige studio-look
+  let highlightPixels = 0;
+  if (cfg.HIGHLIGHTS.enabled && analysis.bbox) {
+    highlightPixels = compressHighlights(data, alpha, width, height, cfg.HIGHLIGHTS);
+  }
 
   // ruiten donker tinten zodat de oorspronkelijke omgeving niet door het
   // glas zichtbaar blijft (detectie + SAM2-masker + wiskundige verdonkering)
@@ -388,9 +399,13 @@ async function processImage(
   if (cfg.WINDOWS.enabled && cli.ai && analysis.bbox) {
     try {
 
-      const detectedWindows = await detectWindows(
-        inputBytes, cfg.WINDOWS.detectPrompt, CACHE_DIR, cfg.AI, cli.useCache,
-      );
+      const detectedWindows = (
+        await Promise.all(
+          cfg.WINDOWS.detectPrompts.map((prompt) =>
+            detectWindows(inputBytes, prompt, CACHE_DIR, cfg.AI, cli.useCache),
+          ),
+        )
+      ).flat();
       const onCar = filterBoxesOnCar(
         filterPlausibleWindowBoxes(detectedWindows, analysis.bbox),
         alpha, width, height, cfg.ALPHA_THRESHOLD,
@@ -590,6 +605,7 @@ async function processImage(
         groundTrimmedPx,
         groundFallback: analysis.groundFallback,
         windows: windowInfo,
+        highlightPixels,
         contactY,
         widthRatio: Number(widthRatio.toFixed(4)),
         preset: cli.preset ?? null,

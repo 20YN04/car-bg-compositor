@@ -50,7 +50,9 @@ async function detectObjects(
   aiCfg: AiConfig,
   useCache: boolean,
 ): Promise<PlateBox[]> {
-  const hash = createHash("sha256").update(imageBytes).digest("hex");
+  // prompt mee in de cachesleutel: anders levert een promptwijziging
+  // stilletjes de oude detecties uit de cache
+  const hash = createHash("sha256").update(imageBytes).update(prompt).digest("hex");
   const cachePath = path.join(cacheDir, `${hash}.${cacheSuffix}.json`);
   if (useCache && existsSync(cachePath)) {
     aiStats.detectCacheHits++;

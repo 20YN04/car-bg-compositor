@@ -1,5 +1,5 @@
 import sharp from "sharp";
-import type { HarmonizeConfig } from "./config.js";
+import type { HarmonizeConfig, HighlightConfig } from "./config.js";
 
 export interface ChannelMeans {
   r: number;
@@ -86,4 +86,54 @@ export function harmonizeColors(
     rgba[p + 2] = Math.min(255, Math.round((rgba[p + 2] ?? 0) * gains.b));
   }
   return gains;
+}
+
+/**
+ * Specular-compressie: de originele omgeving (tl-balken, spots) laat felle
+ * witte spikkels en strepen achter in de lak die vloeken met de rustige
+ * studio-achtergrond. Een soft-knee curve comprimeert alleen de luminantie
+ * boven de knee — normale lakglans en verlopen blijven onaangetast, de hue
+ * blijft behouden (alle kanalen schalen mee). Puur een curve, niet generatief.
+ * Retourneert het aantal aangepaste pixels.
+ */
+export function compressHighlights(
+  rgba: Buffer,
+  alpha: Uint8Array,
+  width: number,
+  height: number,
+  cfg: HighlightConfig,
+): number {
+  if (!cfg.enabled || cfg.strength <= 0) return 0;
+  // adaptieve knee: op een witte auto ligt de hele carrosserie boven een
+  // vaste knee en zou de lak afvlakken; de knee schuift daarom mee met de
+  // gemiddelde helderheid van de auto zelf — alleen echte uitschieters
+  // (spot-reflecties) blijven erboven
+  let sum = 0;
+  let n = 0;
+  for (let i = 0; i < width * height; i++) {
+    if ((alpha[i] ?? 0) === 0) continue;
+    const p = i * 4;
+    sum += Math.max(rgba[p] ?? 0, rgba[p + 1] ?? 0, rgba[p + 2] ?? 0);
+    n++;
+  }
+  if (n === 0) return 0;
+  const knee = Math.max(cfg.knee, sum / n + 35);
+  const keep = 1 - cfg.strength;
+  let touched = 0;
+  for (let i = 0; i < width * height; i++) {
+    if ((alpha[i] ?? 0) === 0) continue;
+    const p = i * 4;
+    const r = rgba[p] ?? 0;
+    const g = rgba[p + 1] ?? 0;
+    const b = rgba[p + 2] ?? 0;
+    const max = Math.max(r, g, b);
+    if (max <= knee) continue;
+    const target = knee + (max - knee) * keep;
+    const scale = target / max;
+    rgba[p] = Math.round(r * scale);
+    rgba[p + 1] = Math.round(g * scale);
+    rgba[p + 2] = Math.round(b * scale);
+    touched++;
+  }
+  return touched;
 }
