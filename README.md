@@ -25,6 +25,8 @@ eigen achtergronden kun je daarnaast in `./backgrounds/` leggen.
 
 ```sh
 pnpm start                          # alles in ./in/
+node scripts/make-studio-bg.mjs     # genereer de carredo-achtige studioplate (eenmalig)
+pnpm start --bg studio.png          # composite op die studioplate
 pnpm start --file foo.jpg           # één beeld
 pnpm start --bg studio-grey.jpg     # andere achtergrond (uit ./backgrounds/)
 pnpm start --ground-y 1100          # config overriden zonder file-edit

@@ -293,6 +293,21 @@ export const defaultConfig: Config = {
     margin: 56,
   },
   BACKGROUND_PROFILES: {
+    // gegenereerde carredo-achtige studioplate (scripts/make-studio-bg.mjs)
+    "studio.png": {
+      horizonY: 576,
+      contactTargetY: 985,
+      floorScaleRef: 225, // ~0.52 canvasbreedte bij 4.4 m spanwijdte
+      carWidthMeters: 4.4,
+      lightDirX: -0.2,
+      lightSoftness: 1.3,
+      floorReflectivity: 0.22,
+      reflectionHeightRatio: 0.28,
+      glowStrength: 0.2,
+      vignetteStrength: 0.3,
+      toneBrightness: 0.94,
+      toneWarmth: 0,
+    },
     // gekalibreerd op de betonvloer-showroomplate (1440×938 → cover 1920×1440)
     "showroom.jpg": {
       horizonY: 867,
