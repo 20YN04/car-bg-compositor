@@ -1023,7 +1023,9 @@ async function main(): Promise<void> {
       results.push(await processImage(file, backgroundPath, cfg, cli, run));
     } catch (err) {
       // één mislukking mag de batch niet stoppen
-      const message = err instanceof Error ? err.message : String(err);
+      const message = err instanceof Error
+        ? (err.message || ((err as any).body ? JSON.stringify((err as any).body).slice(0, 200) : err.name))
+        : String(err);
       console.error(`  ✗ ${file}: ${message}`);
       results.push({ file, ok: false, error: message, warnings: [] });
     }
