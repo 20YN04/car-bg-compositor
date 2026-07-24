@@ -145,6 +145,8 @@ export interface HighlightConfig {
   strength: number; // 0..1
 }
 
+export type GenBgProvider = "flux" | "gemini";
+
 export interface GenBgConfig {
   /**
    * Hybride scène-stap: FLUX Fill herschildert achtergrond + contactschaduw
@@ -161,6 +163,8 @@ export interface GenBgConfig {
    * all: elke foto. (Scenario-keuze 2026-07-24: hero.)
    */
   mode: "hero" | "all";
+  /** flux (default): fal.ai FLUX Fill. gemini: Google Gemini Nano Banana. */
+  provider: GenBgProvider;
   modelId: string;
   prompt: string;
   costPerCall: number; // ijken op het fal-dashboard
@@ -174,6 +178,13 @@ export interface GenBgConfig {
    * terug op de scène.
    */
   fillMaxMegapixels: number;
+}
+
+export interface GeminiConfig {
+  modelId: string;
+  costPerCall: number;
+  /** Prefix voor de GENBG-prompt: vertelt Gemini dat het zwarte silhouet een placeholder is. */
+  maskPrefix: string;
 }
 
 export type AnglePreset = "side" | "front34" | "rear34";
@@ -240,6 +251,7 @@ export interface Config {
   HIGHLIGHTS: HighlightConfig; // specular-compressie op de autolaag
   FINISH: FinishConfig; // grade op het eindbeeld
   GENBG: GenBgConfig; // hybride generatieve scène rond de beschermde auto
+  GEMINI: GeminiConfig; // Google Gemini Nano Banana (image editing)
   BACKGROUND_PROFILES: Record<string, BackgroundProfile>; // key = bestandsnaam
   DEFAULT_PROFILE: BackgroundProfile;
   HARMONIZE: HarmonizeConfig;
@@ -413,6 +425,7 @@ export const defaultConfig: Config = {
   GENBG: {
     enabled: true,
     mode: "hero",
+    provider: "flux",
     modelId: "fal-ai/flux-pro/v1/fill",
     // géén "showroom" in de prompt: dat nodigt het model uit om er andere
     // auto's en een dealerhal bij te verzinnen
@@ -429,6 +442,21 @@ export const defaultConfig: Config = {
     seed: 20260724,
     maxAttempts: 3,
     fillMaxMegapixels: 1,
+  },
+  GEMINI: {
+    // Gemini 3.1 Flash met image-generation: Nano Banana (image editing)
+    modelId: "gemini-3.1-flash-image",
+    costPerCall: 0.02, // schatting — ijken op Google AI Studio dashboard
+    /**
+     * Extra prompt-prefix voor Gemini: het model krijgt een beeld met
+     * een zwart gemaskeerde auto-silhouet — zonder deze instructie vult
+     * Gemini dat zwarte gat op met een zelf verzonnen auto.
+     */
+    maskPrefix:
+      "The black silhouette is a masked-out placeholder for a car. " +
+      "Do NOT draw or generate any car, vehicle, or object in the black " +
+      "area. Only generate the photo studio background around and behind " +
+      "the black silhouette. ",
   },
   PRESETS: {
     side: { spanMeters: 4.3 },
