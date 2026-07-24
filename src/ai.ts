@@ -15,6 +15,8 @@ export interface AiStats {
   segmentCacheHits: number;
   fillCalls: number;
   fillCacheHits: number;
+  ocrCalls: number;
+  ocrCacheHits: number;
 }
 
 export const aiStats: AiStats = {
@@ -26,6 +28,8 @@ export const aiStats: AiStats = {
   segmentCacheHits: 0,
   fillCalls: 0,
   fillCacheHits: 0,
+  ocrCalls: 0,
+  ocrCacheHits: 0,
 };
 
 export interface PlateBox {
@@ -205,6 +209,34 @@ export async function visualYesNo(
   const parsed: YesNoResult = { yes: /^\s*yes\b/i.test(answer), answer };
   await writeFile(cachePath, JSON.stringify(parsed));
   return parsed;
+}
+
+/**
+ * OCR via Florence-2: alle leesbare tekst in het beeld als één string.
+ * Gebruikt als tekst-poort op gegenereerde scènes (FLUX signeert lage-
+ * resolutie beelden graag met een pseudo-watermerk in de hoek).
+ * Docs: https://fal.ai/models/fal-ai/florence-2-large/ocr/api
+ */
+export async function readSceneText(
+  imageBytes: Buffer,
+  cacheDir: string,
+  useCache: boolean,
+): Promise<string> {
+  const hash = createHash("sha256").update(imageBytes).update("ocr").digest("hex");
+  const cachePath = path.join(cacheDir, `${hash}.ocr.json`);
+  if (useCache && existsSync(cachePath)) {
+    aiStats.ocrCacheHits++;
+    return JSON.parse(await readFile(cachePath, "utf8")) as string;
+  }
+  const imageUrl = await uploadImage(imageBytes, "ocr.jpg");
+  const result = await fal.subscribe("fal-ai/florence-2-large/ocr", {
+    input: { image_url: imageUrl },
+  });
+  aiStats.ocrCalls++;
+  const data = result.data as { results?: unknown };
+  const text = typeof data.results === "string" ? data.results : JSON.stringify(data.results ?? "");
+  await writeFile(cachePath, JSON.stringify(text));
+  return text;
 }
 
 /**

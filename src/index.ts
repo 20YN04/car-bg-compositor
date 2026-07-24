@@ -30,6 +30,7 @@ import {
   detectCars,
   detectWindows,
   fillScene,
+  readSceneText,
   segmentByBoxes,
   visualYesNo,
 } from "./ai.js";
@@ -619,14 +620,52 @@ async function processImage(
           cutoutFlat, EXHAUST_PROMPT, CACHE_DIR, cfg.AI, cli.useCache,
         );
 
+        // fill op ≤ fillMaxMegapixels (FLUX rekent per MP, naar boven
+        // afgerond): scène-verlopen overleven de upscale onzichtbaar, de
+        // auto gaat sowieso op volle resolutie terug
+        const mpScale = Math.min(
+          1,
+          Math.sqrt(
+            (cfg.GENBG.fillMaxMegapixels * 1e6) / (cfg.CANVAS.width * cfg.CANVAS.height),
+          ),
+        );
+        const fw = Math.max(16, Math.round((cfg.CANVAS.width * mpScale) / 16) * 16);
+        const fh = Math.max(16, Math.round((cfg.CANVAS.height * mpScale) / 16) * 16);
+        const fillInput = await sharp(mathComposite)
+          .resize(fw, fh, { fit: "fill" })
+          .png()
+          .toBuffer();
+        const fillMaskSmall = await sharp(fillMask)
+          .resize(fw, fh, { fit: "fill" })
+          .threshold(128)
+          .png()
+          .toBuffer();
+
+        // rand-restauratie: FLUX-signatures, pseudo-watermerken en
+        // achtergrondauto's hangen vrijwel altijd tegen de beeldrand; de
+        // buitenste band van de scène wordt met feather teruggezet naar het
+        // mathematische composiet — op een vlakke plate onzichtbaar, en
+        // deterministischer dan welke detectiepoort ook
+        const bandW = Math.round(cfg.CANVAS.width * 0.045);
+        const ringSvg = Buffer.from(
+          `<svg width="${cfg.CANVAS.width}" height="${cfg.CANVAS.height}" xmlns="http://www.w3.org/2000/svg">` +
+            `<path fill-rule="evenodd" fill="white" d="M0 0 H${cfg.CANVAS.width} V${cfg.CANVAS.height} H0 Z ` +
+            `M${bandW} ${bandW} H${cfg.CANVAS.width - bandW} V${cfg.CANVAS.height - bandW} H${bandW} Z"/></svg>`,
+        );
+        const ringMask = await sharp(ringSvg).blur(bandW / 3).png().toBuffer();
+        const borderPatch = await sharp(mathComposite)
+          .composite([{ input: ringMask, blend: "dest-in" }])
+          .png()
+          .toBuffer();
+
         for (let attempt = 0; attempt < cfg.GENBG.maxAttempts; attempt++) {
           const scene = await fillScene(
-            mathComposite, fillMask, cfg.GENBG.prompt, cfg.GENBG.modelId,
+            fillInput, fillMaskSmall, cfg.GENBG.prompt, cfg.GENBG.modelId,
             CACHE_DIR, cli.useCache, cfg.GENBG.seed + attempt,
           );
           const candidate = await sharp(scene)
             .resize(cfg.CANVAS.width, cfg.CANVAS.height, { fit: "fill" })
-            .composite([carLayer])
+            .composite([{ input: borderPatch }, carLayer])
             .png()
             .toBuffer();
           const checkJpeg = await sharp(candidate).jpeg({ quality: 85 }).toBuffer();
@@ -664,6 +703,19 @@ async function processImage(
           const platform = await visualYesNo(
             checkJpeg, PLATFORM_PROMPT, CACHE_DIR, cfg.AI, cli.useCache,
           );
+          // tekst-poort: OCR op de scène met de auto zwart afgedekt (badge en
+          // dealerstickers op de auto mogen geen false positive geven); FLUX
+          // signeert lage-resolutiescènes graag met pseudo-tekst in de hoek
+          const carBlack = await sharp(carLayer.input)
+            .linear([0, 0, 0, 1], [0, 0, 0, 0])
+            .png()
+            .toBuffer();
+          const sceneOnly = await sharp(candidate)
+            .composite([{ input: carBlack, left: carLayer.left, top: carLayer.top }])
+            .jpeg({ quality: 85 })
+            .toBuffer();
+          const sceneText = (await readSceneText(sceneOnly, CACHE_DIR, cli.useCache))
+            .replace(/[^A-Za-z0-9]/g, "");
           const partsInvented = sceneExhaust.yes && !realExhaust.yes;
           // na de kolomfilter is élke overgebleven box een vreemde auto
           const extraCar = carBoxes.length > 0;
@@ -678,7 +730,9 @@ async function processImage(
             ? `extra voertuig/persoon (${others.answer})`
             : partsInvented
               ? `verzonnen uitlaten (${sceneExhaust.answer})`
-              : `podium/vloermarkering (${platform.answer})`;
+              : platform.yes
+                ? `podium/vloermarkering (${platform.answer})`
+                : `verzonnen tekst ("${sceneText.slice(0, 40)}")`;
           console.warn(`  ⚠ ${file}: scène-poging ${attempt + 1} afgekeurd: ${reason}`);
         }
         if (!genbgApplied) {
@@ -794,6 +848,7 @@ function printSummary(results: ImageResult[], cfg: Config): void {
     `SAM2-segm.:  ${aiStats.segmentCalls} calls, ${aiStats.segmentCacheHits} cache-hits (matte + ruiten)`,
   );
   console.log(`FLUX Fill:   ${aiStats.fillCalls} calls, ${aiStats.fillCacheHits} cache-hits (scène)`);
+  console.log(`OCR:         ${aiStats.ocrCalls} calls, ${aiStats.ocrCacheHits} cache-hits (tekst-poort)`);
 
   const byCode = new Map<string, string[]>();
   for (const r of results) {
@@ -818,7 +873,8 @@ function printSummary(results: ImageResult[], cfg: Config): void {
     aiStats.detectCalls * cfg.AI.costPerDetection +
     aiStats.vlmCalls * cfg.AI.costPerQuery +
     aiStats.segmentCalls * cfg.AI.costPerSegment +
-    aiStats.fillCalls * cfg.GENBG.costPerCall;
+    aiStats.fillCalls * cfg.GENBG.costPerCall +
+    aiStats.ocrCalls * cfg.AI.costPerDetection;
   const perImage =
     cfg.COST_PER_CALL_USD +
     (cfg.DETECT.enabled ? cfg.AI.costPerDetection : 0) +

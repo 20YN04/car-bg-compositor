@@ -145,6 +145,14 @@ export interface GenBgConfig {
   costPerCall: number; // ijken op het fal-dashboard
   seed: number; // basisseed; per afgekeurde poging +1
   maxAttempts: number; // hallucinatie-poort: max scène-pogingen
+  /**
+   * FLUX Fill rekent $0.05 per megapixel, afgerond naar boven. Het volle
+   * canvas (1920×1440 = 2.76 MP) kost dus $0.15/poging; op ≤1 MP genereren
+   * en de scène opschalen kost $0.05. De achtergrond bestaat uit zachte
+   * verlopen — de upscale is onzichtbaar; de auto gaat op volle resolutie
+   * terug op de scène.
+   */
+  fillMaxMegapixels: number;
 }
 
 export type AnglePreset = "side" | "front34" | "rear34";
@@ -387,9 +395,10 @@ export const defaultConfig: Config = {
       "shadow under the tires and a subtle car reflection on the floor. " +
       "The car stands directly on the flat floor — no podium, no " +
       "turntable, no platform. Photorealistic.",
-    costPerCall: 0.05,
+    costPerCall: 0.05, // 1 MP-fill @ $0.05/MP (afgerond naar boven)
     seed: 20260724,
     maxAttempts: 3,
+    fillMaxMegapixels: 1,
   },
   PRESETS: {
     side: { spanMeters: 4.3 },
