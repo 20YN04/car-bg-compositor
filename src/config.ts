@@ -183,8 +183,10 @@ export interface GenBgConfig {
 export interface GeminiConfig {
   modelId: string;
   costPerCall: number;
-  /** Prefix voor de GENBG-prompt: vertelt Gemini dat het zwarte silhouet een placeholder is. */
-  maskPrefix: string;
+  /** Prompt voor showroom-compositing: Gemini plaatst auto op achtergrond met stijlrefs. */
+  showroomPrompt: string;
+  /** Pad naar de target-achtergrond. */
+  backgroundPath: string;
 }
 
 export type AnglePreset = "side" | "front34" | "rear34";
@@ -444,19 +446,23 @@ export const defaultConfig: Config = {
     fillMaxMegapixels: 1,
   },
   GEMINI: {
-    // Gemini 3.1 Flash met image-generation: Nano Banana (image editing)
     modelId: "gemini-3.1-flash-image",
-    costPerCall: 0.02, // schatting — ijken op Google AI Studio dashboard
-    /**
-     * Extra prompt-prefix voor Gemini: het model krijgt een beeld met
-     * een zwart gemaskeerde auto-silhouet — zonder deze instructie vult
-     * Gemini dat zwarte gat op met een zelf verzonnen auto.
-     */
-    maskPrefix:
-      "The black silhouette is a masked-out placeholder for a car. " +
-      "Do NOT draw or generate any car, vehicle, or object in the black " +
-      "area. Only generate the photo studio background around and behind " +
-      "the black silhouette. ",
+    costPerCall: 0.02,
+    backgroundPath: "backgrounds/showroom_bg.png",
+    showroomPrompt:
+      "Take the car from the FIRST image and place it into the grey studio " +
+      "shown in the SECOND image. The remaining images (3-6) are reference " +
+      "examples showing the desired result — match their positioning, scale, " +
+      "lighting, and shadow exactly.\n\n" +
+      "POSITIONING: Car centered on polished concrete floor, soft contact " +
+      "shadow under tires, subtle floor reflection. Studio like an aircraft " +
+      "hangar — ≥6m between car and back wall, ≥30% image height of empty " +
+      "floor behind car. Camera ~1.7m slightly tilted down.\n\n" +
+      "CAR: Match source camera angle exactly. Preserve original paint, " +
+      "wheels, rims, badges, headlights. Do NOT alter the car. Replace only " +
+      "reflections (swap trees/sky for grey studio). Windows = dark tinted.\n\n" +
+      "OUTPUT: Photorealistic studio photo. No extra cars, people, text, " +
+      "watermarks. 8:5 aspect ratio.",
   },
   PRESETS: {
     side: { spanMeters: 4.3 },
