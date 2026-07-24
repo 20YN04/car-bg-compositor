@@ -131,6 +131,22 @@ export interface HighlightConfig {
   strength: number; // 0..1
 }
 
+export interface GenBgConfig {
+  /**
+   * Hybride scène-stap: FLUX Fill herschildert achtergrond + contactschaduw
+   * + vloerreflectie rond de auto (masker: wit = herschilderen, zwart = auto
+   * behouden). De originele autopixels worden er daarna ALTIJD pixel-exact
+   * terug overheen gelegd — velgen/badges kunnen dus niet vervormen. Dit is
+   * de enige generatieve stap in de pipeline en raakt de auto nooit.
+   */
+  enabled: boolean;
+  modelId: string;
+  prompt: string;
+  costPerCall: number; // ijken op het fal-dashboard
+  seed: number; // basisseed; per afgekeurde poging +1
+  maxAttempts: number; // hallucinatie-poort: max scène-pogingen
+}
+
 export type AnglePreset = "side" | "front34" | "rear34";
 
 export interface PresetOverride {
@@ -193,6 +209,7 @@ export interface Config {
   WINDOWS: WindowsConfig;
   BRANDING: BrandingConfig;
   HIGHLIGHTS: HighlightConfig; // specular-compressie op de autolaag
+  GENBG: GenBgConfig; // hybride generatieve scène rond de beschermde auto
   BACKGROUND_PROFILES: Record<string, BackgroundProfile>; // key = bestandsnaam
   DEFAULT_PROFILE: BackgroundProfile;
   HARMONIZE: HarmonizeConfig;
@@ -355,6 +372,24 @@ export const defaultConfig: Config = {
     enabled: true,
     knee: 200, // ondergrens; schuift adaptief mee met de autohelderheid
     strength: 0.75,
+  },
+  GENBG: {
+    enabled: true,
+    modelId: "fal-ai/flux-pro/v1/fill",
+    // géén "showroom" in de prompt: dat nodigt het model uit om er andere
+    // auto's en een dealerhal bij te verzinnen
+    prompt:
+      "A completely empty photo studio: one plain seamless light gray " +
+      "backdrop wall and a smooth matte gray concrete floor. The room is " +
+      "empty — no other cars, no objects, no people, no windows, no " +
+      "ceiling, no visible light fixtures, no text. Soft diffuse studio " +
+      "light matching the light on the car. A realistic soft contact " +
+      "shadow under the tires and a subtle car reflection on the floor. " +
+      "The car stands directly on the flat floor — no podium, no " +
+      "turntable, no platform. Photorealistic.",
+    costPerCall: 0.05,
+    seed: 20260724,
+    maxAttempts: 3,
   },
   PRESETS: {
     side: { spanMeters: 4.3 },

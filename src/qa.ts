@@ -17,7 +17,8 @@ export type QACode =
   | "NO_CAR_DETECTED"
   | "PLATE_NOT_FOUND"
   | "AI_MASK_SUSPECT"
-  | "AI_NOT_GROUNDED";
+  | "AI_NOT_GROUNDED"
+  | "GENBG_REJECTED";
 
 export interface QAWarning {
   code: QACode;

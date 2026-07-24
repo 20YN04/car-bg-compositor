@@ -96,7 +96,7 @@ describe("computePlacement", () => {
     const bgPath = path.join(dir, "bg.png");
     await generateDefaultBackground(bgPath, cfg.CANVAS);
 
-    const jpeg = await compositeImage(
+    const { image: jpeg } = await compositeImage(
       {
         rgba, width: srcW, height: srcH, bbox, placement, backgroundPath: bgPath,
         profile: cfg.DEFAULT_PROFILE, contactY: cfg.GROUND_Y,

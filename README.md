@@ -72,6 +72,7 @@ draaien (bijv. tijdens het tunen van de compositing) kost geen API-credits.
 | `BACKGROUND_PROFILES` | kalibratie per achtergrond-plate: `contactTargetY` (vloerlijn), `floorScaleRef` (px/m), lichtrichting/zachtheid, vloerreflectiviteit. **Belangrijk:** de camerahoogte/-hoek van de plate moet bij de auto-shots passen; willekeurige plates werken niet — een mismatch is een plate-keuzeprobleem, geen codebug |
 | `HARMONIZE` | kleur/belichting van de auto subtiel richting de achtergrondtoon (per-kanaal gains met cap) — puur curves, geen generatieve stap |
 | `HIGHLIGHTS` | specular-compressie: dempt felle reflecties van de oorspronkelijke omgeving (tl-balken, spots) in de lak via een soft-knee curve; de knee schuift adaptief mee met de autohelderheid zodat een witte auto niet afvlakt |
+| `GENBG` | hybride scène-stap (FLUX Fill): herschildert achtergrond + contactschaduw + vloerreflectie rond de auto; de originele autopixels gaan er daarna ALTIJD pixel-exact terug overheen. Elke poging passeert een hallucinatie-poort (Florence-telling vreemde auto's via IoU met de eigen positie + VLM-checks op podium/vloermarkering en verzonnen uitlaten, differentieel t.o.v. de cutout); afgekeurd → nieuwe seed, na `maxAttempts` → mathematisch composiet + `GENBG_REJECTED`. Uitzetten: `--no-genbg` |
 | `PRESETS` | per-hoek kadrering (side/front34/rear34): eigen spanwijdte en optioneel contactlijn |
 | `MONTHLY_VOLUME` | beeldvolume voor de kostenextrapolatie (default 75.000) |
 | `COST_PER_CALL_USD` | prijs per API-call voor de kostenschatting — ijken op het fal-dashboard |
@@ -92,6 +93,7 @@ Niet-blokkerende waarschuwingen per beeld, gegroepeerd in de eindsamenvatting:
 - `OUT_OF_CANVAS` — plaatsing valt (deels) buiten het canvas
 - `PLATE_NOT_FOUND` — geen plaat gedetecteerd, dus niet geanonimiseerd
 - `AI_MASK_SUSPECT`, `AI_NOT_GROUNDED` — het vision-model twijfelt aan masker of aarding
+- `GENBG_REJECTED` — alle generatieve scène-pogingen door de hallucinatie-poort afgekeurd; mathematisch composiet gebruikt
 
 ## Nummerplaat en AI-controles
 

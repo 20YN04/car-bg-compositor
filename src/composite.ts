@@ -227,6 +227,13 @@ export interface CompositeInput {
   contactY: number; // canvas-y van de contactlijn (voor de vloerreflectie)
 }
 
+export interface CompositeResult {
+  image: Buffer; // PNG van het volledige composiet
+  /** De geschaalde/gecropte autolaag + positie, zodat een generatieve
+   * scène-stap de originele autopixels er pixel-exact terug op kan leggen. */
+  carLayer: { input: Buffer; left: number; top: number };
+}
+
 /**
  * Composite: achtergrond → schaduw (multiply) → auto. Geeft een PNG-buffer
  * terug zodat de plaat-anonimisatie verliesvrij kan volgen; de aanroeper
@@ -235,7 +242,7 @@ export interface CompositeInput {
 export async function compositeImage(
   input: CompositeInput,
   cfg: Config,
-): Promise<Buffer> {
+): Promise<CompositeResult> {
   const { rgba, width, height, bbox, placement, backgroundPath } = input;
   const canvas = cfg.CANVAS;
 
@@ -374,7 +381,8 @@ export async function compositeImage(
   }
 
   layers.push({ input: car, left, top });
-  return sharp(background).composite(layers).png().toBuffer();
+  const image = await sharp(background).composite(layers).png().toBuffer();
+  return { image, carLayer: { input: car, left, top } };
 }
 
 /**

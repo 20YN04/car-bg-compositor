@@ -27,7 +27,9 @@ import {
   aiStats,
   detectPlates,
   detectWheels,
+  detectCars,
   detectWindows,
+  fillScene,
   segmentByBoxes,
   visualYesNo,
 } from "./ai.js";
@@ -77,6 +79,19 @@ const MASK_PROMPT =
   "with no unrelated objects like poles, wind turbines or people attached " +
   "to it? Answer YES or NO, followed by a short reason.";
 
+const OTHERS_PROMPT =
+  "Besides the single main car, are there any other vehicles or people " +
+  "visible in this image? Answer YES or NO, followed by a short reason.";
+
+const PLATFORM_PROMPT =
+  "Is the car standing on a round platform, podium or turntable, or are " +
+  "there painted lines, arrows or markings on the floor? " +
+  "Answer YES or NO, followed by a short reason.";
+
+const EXHAUST_PROMPT =
+  "Are metal exhaust pipes visible under the rear bumper of the car? " +
+  "Answer YES or NO, followed by a short reason.";
+
 const GROUND_PROMPT =
   "Does the car in this image appear to stand naturally on the floor, with " +
   "its tires touching the ground, not floating above it and not sunk into " +
@@ -95,6 +110,7 @@ function parseCli(): { cfg: Config; cli: CliOptions } {
       "no-detect": { type: "boolean", default: false },
       "no-windows": { type: "boolean", default: false },
       "no-harmonize": { type: "boolean", default: false },
+      "no-genbg": { type: "boolean", default: false },
       matte: { type: "string" },
       plate: { type: "string" },
       preset: { type: "string" },
@@ -114,6 +130,7 @@ function parseCli(): { cfg: Config; cli: CliOptions } {
   }
   if (values["no-windows"]) cfg.WINDOWS.enabled = false;
   if (values["no-harmonize"]) cfg.HARMONIZE.enabled = false;
+  if (values["no-genbg"]) cfg.GENBG.enabled = false;
   if (values.matte !== undefined) {
     if (!["fal-birefnet", "fal-rmbg", "api4ai"].includes(values.matte)) {
       throw new Error("--matte moet fal-birefnet, fal-rmbg of api4ai zijn");
@@ -540,8 +557,9 @@ async function processImage(
 
   let outJpeg: Buffer | null = null;
   let plateStatus: PlateStatus = plateEnabled ? "none" : "off";
+  let genbgApplied = false;
   if (analysis.bbox && placement) {
-    const composited = await compositeImage(
+    const { image: mathComposite, carLayer } = await compositeImage(
       {
         rgba: data, width, height, bbox: analysis.bbox, placement, backgroundPath,
         contactShadows: buildContactShadows(
@@ -552,6 +570,130 @@ async function processImage(
       },
       cfg,
     );
+
+    // hybride scène-stap: FLUX Fill herschildert achtergrond + schaduw +
+    // reflectie rond de auto; daarna gaan de originele autopixels er
+    // pixel-exact terug overheen. Elke poging wordt door een VLM gecheckt op
+    // hallucinaties buiten het beschermde masker (tweede auto, uitlaten
+    // onder een EV-bumper, vloermarkeringen) — bij afkeuring een nieuwe
+    // seed, en na GENBG.maxAttempts terug naar het mathematische composiet.
+    let composited = mathComposite;
+    if (cfg.GENBG.enabled && cli.ai) {
+      try {
+        // masker: wit = herschilderen, zwart = alleen de auto behouden.
+        // Beeldvullend wit geeft de mooiste, coherentste scènes; het
+        // hallucinatierisico (tweede auto, podium, verzonnen onderdelen)
+        // wordt afgevangen door de VLM-poort + reseed hieronder. Een tot
+        // een band ingeperkt masker gaf lelijkere artefacten: FLUX maakte
+        // van de maskerrand een draaiplateau onder de auto.
+        // keep = exact de autovorm. Een eerdere "strook onder de bumper"
+        // (autovorm omlaag geschoven mee-beschermen) werkte averechts: het
+        // auto-vormige gat in het masker werd door FLUX ingevuld als een
+        // tweede auto ónder de onze.
+        const keepShape = await sharp(carLayer.input)
+          .ensureAlpha()
+          .extractChannel(3)
+          .threshold(8)
+          .negate()
+          .png()
+          .toBuffer();
+        const fillMask = await sharp({
+          create: {
+            width: cfg.CANVAS.width,
+            height: cfg.CANVAS.height,
+            channels: 3,
+            background: { r: 255, g: 255, b: 255 },
+          },
+        })
+          .composite([{ input: keepShape, left: carLayer.left, top: carLayer.top }])
+          .png()
+          .toBuffer();
+
+        // referentie voor de differentiële check: heeft de ECHTE auto
+        // zichtbare uitlaten? (FLUX verzint ze graag onder een EV-bumper)
+        const cutoutFlat = await sharp(cutout)
+          .flatten({ background: "#808080" })
+          .jpeg({ quality: 85 })
+          .toBuffer();
+        const realExhaust = await visualYesNo(
+          cutoutFlat, EXHAUST_PROMPT, CACHE_DIR, cfg.AI, cli.useCache,
+        );
+
+        for (let attempt = 0; attempt < cfg.GENBG.maxAttempts; attempt++) {
+          const scene = await fillScene(
+            mathComposite, fillMask, cfg.GENBG.prompt, cfg.GENBG.modelId,
+            CACHE_DIR, cli.useCache, cfg.GENBG.seed + attempt,
+          );
+          const candidate = await sharp(scene)
+            .resize(cfg.CANVAS.width, cfg.CANVAS.height, { fit: "fill" })
+            .composite([carLayer])
+            .png()
+            .toBuffer();
+          const checkJpeg = await sharp(candidate).jpeg({ quality: 85 }).toBuffer();
+          // deterministische tweede-auto-check: Florence vindt auto's
+          // betrouwbaarder dan een klein VLM ze in een ja/nee-vraag ziet.
+          // Een box telt niet mee als hij grotendeels samenvalt met onze
+          // eigen auto (placement) of met diens vloerreflectie — al het
+          // andere is een vreemde auto. Bewust géén kolomfilter: die had
+          // een blinde vlek recht onder de auto.
+          const canvasArea = cfg.CANVAS.width * cfg.CANVAS.height;
+          const iou = (b: { x: number; y: number; w: number; h: number },
+                       r: { x: number; y: number; w: number; h: number }): number => {
+            const ix = Math.max(0, Math.min(b.x + b.w, r.x + r.w) - Math.max(b.x, r.x));
+            const iy = Math.max(0, Math.min(b.y + b.h, r.y + r.h) - Math.max(b.y, r.y));
+            const inter = ix * iy;
+            return inter / (b.w * b.h + r.w * r.h - inter);
+          };
+          const ownRect = {
+            x: placement.x, y: placement.y,
+            w: placement.width, h: placement.height,
+          };
+          const reflRect = {
+            x: placement.x, y: contactY,
+            w: placement.width, h: placement.height * 0.6,
+          };
+          const carBoxes = (await detectCars(checkJpeg, CACHE_DIR, cfg.AI, cli.useCache))
+            .filter((b) => b.w * b.h > 0.02 * canvasArea)
+            .filter((b) => iou(b, ownRect) < 0.25 && iou(b, reflRect) < 0.25);
+          const others = await visualYesNo(
+            checkJpeg, OTHERS_PROMPT, CACHE_DIR, cfg.AI, cli.useCache,
+          );
+          const sceneExhaust = await visualYesNo(
+            checkJpeg, EXHAUST_PROMPT, CACHE_DIR, cfg.AI, cli.useCache,
+          );
+          const platform = await visualYesNo(
+            checkJpeg, PLATFORM_PROMPT, CACHE_DIR, cfg.AI, cli.useCache,
+          );
+          const partsInvented = sceneExhaust.yes && !realExhaust.yes;
+          // na de kolomfilter is élke overgebleven box een vreemde auto
+          const extraCar = carBoxes.length > 0;
+          if (!extraCar && !others.yes && !partsInvented && !platform.yes) {
+            composited = candidate;
+            genbgApplied = true;
+            break;
+          }
+          const reason = extraCar
+            ? `tweede auto gedetecteerd (${carBoxes.length} auto-boxes)`
+            : others.yes
+            ? `extra voertuig/persoon (${others.answer})`
+            : partsInvented
+              ? `verzonnen uitlaten (${sceneExhaust.answer})`
+              : `podium/vloermarkering (${platform.answer})`;
+          console.warn(`  ⚠ ${file}: scène-poging ${attempt + 1} afgekeurd: ${reason}`);
+        }
+        if (!genbgApplied) {
+          warnings.push({
+            code: "GENBG_REJECTED",
+            message: `alle ${cfg.GENBG.maxAttempts} scène-pogingen afgekeurd — mathematisch composiet gebruikt`,
+          });
+        }
+      } catch (err) {
+        console.warn(
+          `  ⚠ ${file}: generatieve scène overgeslagen: ${err instanceof Error ? err.message : err}`,
+        );
+      }
+    }
+
     const anonymized = plateEnabled
       ? await anonymizePlates(composited, plateTargets, cfg.CANVAS, cfg.PLATE, cfg.AI.plateText)
       : { image: composited, status: "off" as PlateStatus };
@@ -606,6 +748,7 @@ async function processImage(
         groundFallback: analysis.groundFallback,
         windows: windowInfo,
         highlightPixels,
+        genbg: genbgApplied,
         contactY,
         widthRatio: Number(widthRatio.toFixed(4)),
         preset: cli.preset ?? null,
@@ -650,6 +793,7 @@ function printSummary(results: ImageResult[], cfg: Config): void {
   console.log(
     `SAM2-segm.:  ${aiStats.segmentCalls} calls, ${aiStats.segmentCacheHits} cache-hits (matte + ruiten)`,
   );
+  console.log(`FLUX Fill:   ${aiStats.fillCalls} calls, ${aiStats.fillCacheHits} cache-hits (scène)`);
 
   const byCode = new Map<string, string[]>();
   for (const r of results) {
@@ -673,14 +817,16 @@ function printSummary(results: ImageResult[], cfg: Config): void {
     maskStats.detectCalls * cfg.AI.costPerDetection +
     aiStats.detectCalls * cfg.AI.costPerDetection +
     aiStats.vlmCalls * cfg.AI.costPerQuery +
-    aiStats.segmentCalls * cfg.AI.costPerSegment;
+    aiStats.segmentCalls * cfg.AI.costPerSegment +
+    aiStats.fillCalls * cfg.GENBG.costPerCall;
   const perImage =
     cfg.COST_PER_CALL_USD +
     (cfg.DETECT.enabled ? cfg.AI.costPerDetection : 0) +
     (cfg.AI.enabled ? 2 * cfg.AI.costPerDetection + 2 * cfg.AI.costPerQuery : 0) +
     (cfg.WINDOWS.enabled ? cfg.AI.costPerDetection + cfg.AI.costPerSegment : 0) +
     (cfg.MATTE.enabled ? cfg.AI.costPerSegment : 0) +
-    (cfg.PLATE.mode === "replace" ? cfg.AI.costPerSegment : 0);
+    (cfg.PLATE.mode === "replace" ? cfg.AI.costPerSegment : 0) +
+    (cfg.GENBG.enabled ? cfg.GENBG.costPerCall : 0);
   const monthly = cfg.MONTHLY_VOLUME * perImage;
   console.log(
     `\nkosten: $${runCost.toFixed(4)} deze run ` +

@@ -13,6 +13,8 @@ export interface AiStats {
   vlmCacheHits: number;
   segmentCalls: number;
   segmentCacheHits: number;
+  fillCalls: number;
+  fillCacheHits: number;
 }
 
 export const aiStats: AiStats = {
@@ -22,6 +24,8 @@ export const aiStats: AiStats = {
   vlmCacheHits: 0,
   segmentCalls: 0,
   segmentCacheHits: 0,
+  fillCalls: 0,
+  fillCacheHits: 0,
 };
 
 export interface PlateBox {
@@ -94,6 +98,15 @@ export async function detectWheels(
   useCache: boolean,
 ): Promise<PlateBox[]> {
   return detectObjects(imageBytes, "wheel", "wheels", cacheDir, aiCfg, useCache);
+}
+
+export async function detectCars(
+  imageBytes: Buffer,
+  cacheDir: string,
+  aiCfg: AiConfig,
+  useCache: boolean,
+): Promise<PlateBox[]> {
+  return detectObjects(imageBytes, "car", "cars", cacheDir, aiCfg, useCache);
 }
 
 export async function detectWindows(
@@ -192,4 +205,65 @@ export async function visualYesNo(
   const parsed: YesNoResult = { yes: /^\s*yes\b/i.test(answer), answer };
   await writeFile(cachePath, JSON.stringify(parsed));
   return parsed;
+}
+
+/**
+ * Generatieve scène-invulling (FLUX.1 Fill): herschildert het witte
+ * maskergebied (achtergrond, vloer, schaduw, reflectie) rond het zwarte
+ * keep-gebied (de auto). De aanroeper legt de originele autopixels er
+ * daarna altijd pixel-exact terug overheen — het model kan de auto zien
+ * (voor kloppend licht en schaduwrichting) maar het eindbeeld bevat
+ * gegarandeerd de onaangeroerde auto.
+ * Docs: https://fal.ai/models/fal-ai/flux-pro/v1/fill/api
+ */
+export async function fillScene(
+  imagePng: Buffer,
+  maskPng: Buffer,
+  prompt: string,
+  modelId: string,
+  cacheDir: string,
+  useCache: boolean,
+  seed = 20260724,
+): Promise<Buffer> {
+  const hash = createHash("sha256")
+    .update(imagePng)
+    .update(maskPng)
+    .update(prompt)
+    .update(modelId)
+    .update(String(seed))
+    .digest("hex");
+  const cachePath = path.join(cacheDir, `${hash}.fill.png`);
+  if (useCache && existsSync(cachePath)) {
+    aiStats.fillCacheHits++;
+    return readFile(cachePath);
+  }
+
+  const imageUrl = await uploadImage(imagePng, "fill-image.png");
+  const maskUrl = await uploadImage(maskPng, "fill-mask.png");
+  const result = await fal.subscribe(modelId, {
+    input: {
+      image_url: imageUrl,
+      mask_url: maskUrl,
+      prompt,
+      output_format: "png",
+      safety_tolerance: "2",
+      seed, // vast per poging: reproduceerbaar + stabiele cache
+    },
+  });
+  aiStats.fillCalls++;
+
+  const data = result.data as { images?: { url?: string }[] };
+  const url = data.images?.[0]?.url;
+  if (!url) {
+    throw new Error(
+      `FLUX Fill gaf geen beeld terug: ${JSON.stringify(result.data).slice(0, 300)}`,
+    );
+  }
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`download scène mislukt: HTTP ${response.status}`);
+  }
+  const scene = Buffer.from(await response.arrayBuffer());
+  await writeFile(cachePath, scene);
+  return scene;
 }
