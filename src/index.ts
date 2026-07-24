@@ -62,7 +62,6 @@ const OUT_DIR = "./out";
 const DEBUG_DIR = "./debug";
 const CACHE_DIR = "./cache";
 const BG_DIR = "./backgrounds";
-const RUN_LOG = path.join(DEBUG_DIR, "run.jsonl");
 
 interface CliOptions {
   file?: string;
@@ -225,11 +224,14 @@ async function writeDebugOutput(
   cfg: Config,
   extras: Record<string, unknown> = {},
 ): Promise<void> {
-  const base = path.parse(file).name;
+  const parsed = path.parse(file);
+  const debugDir = path.join(DEBUG_DIR, parsed.dir);
+  await mkdir(debugDir, { recursive: true });
+  const base = parsed.name;
 
   await sharp(Buffer.from(alpha), { raw: { width, height, channels: 1 } })
     .png()
-    .toFile(path.join(DEBUG_DIR, `${base}.mask.png`));
+    .toFile(path.join(debugDir, `${base}.mask.png`));
 
   // origineel + bbox (rood) + grondlijn (groen); origineel eventueel
   // geschaald naar de cutout-afmetingen zodat de coördinaten kloppen
@@ -252,8 +254,9 @@ async function writeDebugOutput(
     .resize(width, height, { fit: "fill" })
     .composite([{ input: svg }])
     .png()
-    .toFile(path.join(DEBUG_DIR, `${base}.overlay.png`));
+    .toFile(path.join(debugDir, `${base}.overlay.png`));
 
+  const runLog = path.join(debugDir, "run.jsonl");
   const line = {
     file,
     bbox: analysis.bbox,
@@ -268,11 +271,28 @@ async function writeDebugOutput(
     qa: warnings.map((w) => w.code),
     ...extras,
   };
-  await appendFile(RUN_LOG, `${JSON.stringify(line)}\n`);
+  await appendFile(runLog, `${JSON.stringify(line)}\n`);
 }
 
 interface RunContext {
   heroPending: boolean; // hero-modus: is de generatieve scène nog te vergeven?
+}
+
+async function findImages(rootDir: string): Promise<string[]> {
+  const result: string[] = [];
+  async function walk(dir: string): Promise<void> {
+    const entries = await readdir(dir, { withFileTypes: true });
+    for (const e of entries) {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) {
+        await walk(full);
+      } else if (/\.(jpe?g|png)$/i.test(e.name)) {
+        result.push(path.relative(rootDir, full));
+      }
+    }
+  }
+  await walk(rootDir);
+  return result.sort();
 }
 
 async function processImage(
@@ -817,7 +837,9 @@ async function processImage(
       .jpeg({ quality: cfg.JPEG_QUALITY })
       .toBuffer();
     const outName = path.parse(file).name + ".jpg";
-    await writeFile(path.join(OUT_DIR, outName), outJpeg);
+    const outDir = path.join(OUT_DIR, path.parse(file).dir);
+    await mkdir(outDir, { recursive: true });
+    await writeFile(path.join(outDir, outName), outJpeg);
   }
 
   // AI-kwaliteitscontrole: masker compleet? auto op de grond?
@@ -978,14 +1000,16 @@ async function main(): Promise<void> {
     }
     files = [cli.file];
   } else {
-    files = (await readdir(IN_DIR)).filter((f) => /\.(jpe?g|png)$/i.test(f));
+    files = await findImages(IN_DIR);
   }
   if (files.length === 0) {
     console.log(`geen afbeeldingen gevonden in ${IN_DIR}/ (jpg/jpeg/png)`);
     return;
   }
 
-  if (cli.debug) await writeFile(RUN_LOG, "");
+  if (cli.debug) {
+    // per-auto debug: de eerste writeDebugOutput maakt de subdir + run.jsonl aan
+  }
   console.log(
     `${files.length} beeld(en), achtergrond: ${backgroundPath}, ` +
       `ground-y: ${cfg.GROUND_Y}, car-width: ${cfg.CAR_WIDTH_RATIO}`,
