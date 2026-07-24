@@ -27,6 +27,7 @@ eigen achtergronden kun je daarnaast in `./backgrounds/` leggen.
 pnpm start                          # alles in ./in/
 node scripts/make-studio-bg.mjs     # genereer de carredo-achtige studioplate (eenmalig)
 pnpm start --bg studio.png          # composite op die studioplate
+pnpm start --genbg all              # generatieve scène op élke foto (default: hero)
 pnpm start --file foo.jpg           # één beeld
 pnpm start --bg studio-grey.jpg     # andere achtergrond (uit ./backgrounds/)
 pnpm start --ground-y 1100          # config overriden zonder file-edit
@@ -72,7 +73,7 @@ draaien (bijv. tijdens het tunen van de compositing) kost geen API-credits.
 | `BACKGROUND_PROFILES` | kalibratie per achtergrond-plate: `contactTargetY` (vloerlijn), `floorScaleRef` (px/m), lichtrichting/zachtheid, vloerreflectiviteit. **Belangrijk:** de camerahoogte/-hoek van de plate moet bij de auto-shots passen; willekeurige plates werken niet — een mismatch is een plate-keuzeprobleem, geen codebug |
 | `HARMONIZE` | kleur/belichting van de auto subtiel richting de achtergrondtoon (per-kanaal gains met cap) — puur curves, geen generatieve stap |
 | `HIGHLIGHTS` | specular-compressie: dempt felle reflecties van de oorspronkelijke omgeving (tl-balken, spots) in de lak via een soft-knee curve; de knee schuift adaptief mee met de autohelderheid zodat een witte auto niet afvlakt |
-| `GENBG` | hybride scène-stap (FLUX Fill): herschildert achtergrond + contactschaduw + vloerreflectie rond de auto; de originele autopixels gaan er daarna ALTIJD pixel-exact terug overheen. Elke poging passeert een hallucinatie-poort (Florence-telling vreemde auto's via IoU met de eigen positie + VLM-checks op podium/vloermarkering en verzonnen uitlaten, differentieel t.o.v. de cutout); afgekeurd → nieuwe seed, na `maxAttempts` → mathematisch composiet + `GENBG_REJECTED`. Uitzetten: `--no-genbg` |
+| `GENBG` | hybride scène-stap (FLUX Fill): herschildert achtergrond + contactschaduw + vloerreflectie rond de auto; de originele autopixels gaan er daarna ALTIJD pixel-exact terug overheen. Elke poging passeert een hallucinatie-poort (Florence-telling vreemde auto's via IoU met de eigen positie + VLM-checks op podium/vloermarkering en verzonnen uitlaten, differentieel t.o.v. de cutout); afgekeurd → nieuwe seed, na `maxAttempts` → mathematisch composiet + `GENBG_REJECTED`. `mode: "hero"` (default) beperkt de scène tot de eerste bruikbare foto per batch (scenario C: premium hero, consistente rest, ~$0.05–0.15 per listing i.p.v. per foto); `--genbg all` voor elke foto, `--no-genbg` om uit te zetten |
 | `PRESETS` | per-hoek kadrering (side/front34/rear34): eigen spanwijdte en optioneel contactlijn |
 | `MONTHLY_VOLUME` | beeldvolume voor de kostenextrapolatie (default 75.000) |
 | `COST_PER_CALL_USD` | prijs per API-call voor de kostenschatting — ijken op het fal-dashboard |

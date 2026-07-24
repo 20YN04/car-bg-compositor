@@ -140,6 +140,13 @@ export interface GenBgConfig {
    * de enige generatieve stap in de pipeline en raakt de auto nooit.
    */
   enabled: boolean;
+  /**
+   * hero: alleen de eerste bruikbare foto van de batch (de listing-hero)
+   * krijgt de generatieve scène — premium eerste indruk, consistente
+   * mathematische composieten voor de rest, en een fractie van de kosten.
+   * all: elke foto. (Scenario-keuze 2026-07-24: hero.)
+   */
+  mode: "hero" | "all";
   modelId: string;
   prompt: string;
   costPerCall: number; // ijken op het fal-dashboard
@@ -383,6 +390,7 @@ export const defaultConfig: Config = {
   },
   GENBG: {
     enabled: true,
+    mode: "hero",
     modelId: "fal-ai/flux-pro/v1/fill",
     // géén "showroom" in de prompt: dat nodigt het model uit om er andere
     // auto's en een dealerhal bij te verzinnen

@@ -112,6 +112,7 @@ function parseCli(): { cfg: Config; cli: CliOptions } {
       "no-windows": { type: "boolean", default: false },
       "no-harmonize": { type: "boolean", default: false },
       "no-genbg": { type: "boolean", default: false },
+      genbg: { type: "string" },
       matte: { type: "string" },
       plate: { type: "string" },
       preset: { type: "string" },
@@ -132,6 +133,12 @@ function parseCli(): { cfg: Config; cli: CliOptions } {
   if (values["no-windows"]) cfg.WINDOWS.enabled = false;
   if (values["no-harmonize"]) cfg.HARMONIZE.enabled = false;
   if (values["no-genbg"]) cfg.GENBG.enabled = false;
+  if (values.genbg !== undefined) {
+    if (!["hero", "all"].includes(values.genbg)) {
+      throw new Error("--genbg moet hero of all zijn");
+    }
+    cfg.GENBG.mode = values.genbg as Config["GENBG"]["mode"];
+  }
   if (values.matte !== undefined) {
     if (!["fal-birefnet", "fal-rmbg", "api4ai"].includes(values.matte)) {
       throw new Error("--matte moet fal-birefnet, fal-rmbg of api4ai zijn");
@@ -255,11 +262,16 @@ async function writeDebugOutput(
   await appendFile(RUN_LOG, `${JSON.stringify(line)}\n`);
 }
 
+interface RunContext {
+  heroPending: boolean; // hero-modus: is de generatieve scène nog te vergeven?
+}
+
 async function processImage(
   file: string,
   backgroundPath: string,
   cfg: Config,
   cli: CliOptions,
+  run: RunContext,
 ): Promise<ImageResult> {
   const inputPath = path.join(IN_DIR, file);
   const inputBytes = await readFile(inputPath);
@@ -579,7 +591,14 @@ async function processImage(
     // onder een EV-bumper, vloermarkeringen) — bij afkeuring een nieuwe
     // seed, en na GENBG.maxAttempts terug naar het mathematische composiet.
     let composited = mathComposite;
-    if (cfg.GENBG.enabled && cli.ai) {
+    const genbgEligible =
+      cfg.GENBG.enabled &&
+      cli.ai &&
+      (cfg.GENBG.mode === "all" || run.heroPending);
+    if (genbgEligible) {
+      // hero-modus: deze foto verbruikt de hero-slot, ook bij afkeuring —
+      // de hero blijft de hero, een afgekeurde scène wordt mathematisch
+      if (cfg.GENBG.mode === "hero") run.heroPending = false;
       try {
         // masker: wit = herschilderen, zwart = alleen de auto behouden.
         // Beeldvullend wit geeft de mooiste, coherentste scènes; het
@@ -882,12 +901,17 @@ function printSummary(results: ImageResult[], cfg: Config): void {
     (cfg.WINDOWS.enabled ? cfg.AI.costPerDetection + cfg.AI.costPerSegment : 0) +
     (cfg.MATTE.enabled ? cfg.AI.costPerSegment : 0) +
     (cfg.PLATE.mode === "replace" ? cfg.AI.costPerSegment : 0) +
-    (cfg.GENBG.enabled ? cfg.GENBG.costPerCall : 0);
+    (cfg.GENBG.enabled && cfg.GENBG.mode === "all" ? cfg.GENBG.costPerCall : 0);
   const monthly = cfg.MONTHLY_VOLUME * perImage;
   console.log(
     `\nkosten: $${runCost.toFixed(4)} deze run ` +
       `(per beeld: $${perImage.toFixed(4)} — tarieven ijken op fal-dashboard)`,
   );
+  if (cfg.GENBG.enabled && cfg.GENBG.mode === "hero") {
+    console.log(
+      `genbg (hero): ~$${cfg.GENBG.costPerCall.toFixed(2)}/poging, alleen de eerste bruikbare foto per batch`,
+    );
+  }
   console.log(
     `extrapolatie ${cfg.MONTHLY_VOLUME.toLocaleString("nl-BE")} beelden/maand: ~$${monthly.toFixed(0)}/maand`,
   );
@@ -921,10 +945,11 @@ async function main(): Promise<void> {
   );
 
   const results: ImageResult[] = [];
+  const run: RunContext = { heroPending: true };
   for (const file of files) {
     process.stdout.write(`→ ${file}\n`);
     try {
-      results.push(await processImage(file, backgroundPath, cfg, cli));
+      results.push(await processImage(file, backgroundPath, cfg, cli, run));
     } catch (err) {
       // één mislukking mag de batch niet stoppen
       const message = err instanceof Error ? err.message : String(err);
