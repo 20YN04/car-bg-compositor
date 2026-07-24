@@ -118,6 +118,20 @@ export interface HarmonizeConfig {
   maxGain: number; // cap op de per-kanaal gain-afwijking (bv. 0.12 = ±12%)
 }
 
+export interface FinishConfig {
+  /**
+   * Finishing grade op het volledige eindbeeld (auto + scène samen): zachte
+   * contrastcurve, diepere zwarten, subtiele warmte en saturatie. Eén
+   * gedeelde grade laat de (koel tl-belichte) auto en de studioscène als
+   * één foto lezen — het mathematische antwoord op de belichtingsmismatch.
+   */
+  enabled: boolean;
+  contrast: number; // 1 = neutraal; 1.1 = zachte S
+  blackLift: number; // negatief = diepere zwarten (op 0-255)
+  warmth: number; // 0 = neutraal; 0.01 = subtiel warm
+  saturation: number; // 1 = neutraal
+}
+
 export interface HighlightConfig {
   /**
    * Specular-compressie: dempt de felle reflecties van de oorspronkelijke
@@ -224,6 +238,7 @@ export interface Config {
   WINDOWS: WindowsConfig;
   BRANDING: BrandingConfig;
   HIGHLIGHTS: HighlightConfig; // specular-compressie op de autolaag
+  FINISH: FinishConfig; // grade op het eindbeeld
   GENBG: GenBgConfig; // hybride generatieve scène rond de beschermde auto
   BACKGROUND_PROFILES: Record<string, BackgroundProfile>; // key = bestandsnaam
   DEFAULT_PROFILE: BackgroundProfile;
@@ -387,6 +402,13 @@ export const defaultConfig: Config = {
     enabled: true,
     knee: 200, // ondergrens; schuift adaptief mee met de autohelderheid
     strength: 0.75,
+  },
+  FINISH: {
+    enabled: true,
+    contrast: 1.1,
+    blackLift: -7,
+    warmth: 0.006,
+    saturation: 1.05,
   },
   GENBG: {
     enabled: true,

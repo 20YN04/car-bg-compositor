@@ -47,6 +47,7 @@ import {
   type PlateTarget,
 } from "./plate.js";
 import {
+  applyFinish,
   backgroundMeans,
   compressHighlights,
   cutoutMeans,
@@ -672,18 +673,25 @@ async function processImage(
             `M${bandW} ${bandW} H${cfg.CANVAS.width - bandW} V${cfg.CANVAS.height - bandW} H${bandW} Z"/></svg>`,
         );
         const ringMask = await sharp(ringSvg).blur(bandW / 3).png().toBuffer();
-        const borderPatch = await sharp(mathComposite)
-          .composite([{ input: ringMask, blend: "dest-in" }])
-          .png()
-          .toBuffer();
 
         for (let attempt = 0; attempt < cfg.GENBG.maxAttempts; attempt++) {
           const scene = await fillScene(
             fillInput, fillMaskSmall, cfg.GENBG.prompt, cfg.GENBG.modelId,
             CACHE_DIR, cli.useCache, cfg.GENBG.seed + attempt,
           );
-          const candidate = await sharp(scene)
+          const sceneFull = await sharp(scene)
             .resize(cfg.CANVAS.width, cfg.CANVAS.height, { fit: "fill" })
+            .png()
+            .toBuffer();
+          // randband = de scène zelf, zwaar geblurd: artefacten (pseudo-
+          // watermerk, randauto's) worden onleesbare smeer, maar de toon
+          // blijft naadloos — een plate-ring gaf een zichtbare lichte lijst
+          const borderPatch = await sharp(sceneFull)
+            .blur(24)
+            .composite([{ input: ringMask, blend: "dest-in" }])
+            .png()
+            .toBuffer();
+          const candidate = await sharp(sceneFull)
             .composite([{ input: borderPatch }, carLayer])
             .png()
             .toBuffer();
@@ -767,6 +775,7 @@ async function processImage(
       }
     }
 
+    composited = await applyFinish(composited, cfg.FINISH);
     const anonymized = plateEnabled
       ? await anonymizePlates(composited, plateTargets, cfg.CANVAS, cfg.PLATE, cfg.AI.plateText)
       : { image: composited, status: "off" as PlateStatus };

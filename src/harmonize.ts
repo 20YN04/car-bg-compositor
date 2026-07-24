@@ -1,5 +1,5 @@
 import sharp from "sharp";
-import type { HarmonizeConfig, HighlightConfig } from "./config.js";
+import type { FinishConfig, HarmonizeConfig, HighlightConfig } from "./config.js";
 
 export interface ChannelMeans {
   r: number;
@@ -136,4 +136,28 @@ export function compressHighlights(
     touched++;
   }
   return touched;
+}
+
+/**
+ * Finishing grade op het volledige composiet: per-kanaal lineaire
+ * contrastcurve rond het middenpunt met black-lift en warmte, plus
+ * saturatie. Auto en scène krijgen exact dezelfde curve — dat verbindt ze
+ * visueel tot één opname. Puur curves, geen generatieve stap.
+ */
+export async function applyFinish(
+  png: Buffer,
+  cfg: FinishConfig,
+): Promise<Buffer> {
+  if (!cfg.enabled) return png;
+  const c = cfg.contrast;
+  const offset = 128 * (1 - c) + cfg.blackLift;
+  const gains = [1 + cfg.warmth, 1, 1 - cfg.warmth];
+  return sharp(png)
+    .linear(
+      gains.map((g) => g * c),
+      gains.map(() => offset),
+    )
+    .modulate({ saturation: cfg.saturation })
+    .png()
+    .toBuffer();
 }
