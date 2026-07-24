@@ -34,6 +34,7 @@ import {
   segmentByBoxes,
   visualYesNo,
 } from "./ai.js";
+import { geminiStats, generateScene } from "./gemini.js";
 import { applyWindowTint, filterBoxesOnCar, filterPlausibleWindowBoxes } from "./windows.js";
 import { getCarBox, getCutout, maskStats } from "./mask.js";
 import { buildContactShadows, type CanvasRect } from "./composite.js";
@@ -114,6 +115,7 @@ function parseCli(): { cfg: Config; cli: CliOptions } {
       "no-harmonize": { type: "boolean", default: false },
       "no-genbg": { type: "boolean", default: false },
       genbg: { type: "string" },
+      "genbg-provider": { type: "string" },
       matte: { type: "string" },
       plate: { type: "string" },
       preset: { type: "string" },
@@ -139,6 +141,12 @@ function parseCli(): { cfg: Config; cli: CliOptions } {
       throw new Error("--genbg moet hero of all zijn");
     }
     cfg.GENBG.mode = values.genbg as Config["GENBG"]["mode"];
+  }
+  if (values["genbg-provider"] !== undefined) {
+    if (!["flux", "gemini"].includes(values["genbg-provider"])) {
+      throw new Error("--genbg-provider moet flux of gemini zijn");
+    }
+    cfg.GENBG.provider = values["genbg-provider"] as Config["GENBG"]["provider"];
   }
   if (values.matte !== undefined) {
     if (!["fal-birefnet", "fal-rmbg", "api4ai"].includes(values.matte)) {
@@ -651,10 +659,29 @@ async function processImage(
         );
         const fw = Math.max(16, Math.round((cfg.CANVAS.width * mpScale) / 16) * 16);
         const fh = Math.max(16, Math.round((cfg.CANVAS.height * mpScale) / 16) * 16);
-        const fillInput = await sharp(mathComposite)
-          .resize(fw, fh, { fit: "fill" })
-          .png()
-          .toBuffer();
+
+        // Gemini: stuur het beeld met de auto zwart gemaskeerd — zo kan
+        // het model de auto niet zien en dus ook niet dupliceren. FLUX
+        // gebruikt het volledige composiet + separaat fill-mask.
+        const isGemini = cfg.GENBG.provider === "gemini";
+        const fillInput = isGemini
+          ? await sharp(mathComposite)
+              .resize(fw, fh, { fit: "fill" })
+              .composite([{
+                input: await sharp(keepShape)
+                  .resize(fw, fh, { fit: "fill" })
+                  .negate()
+                  .png()
+                  .toBuffer(),
+                left: Math.round(carLayer.left * mpScale),
+                top: Math.round(carLayer.top * mpScale),
+              }])
+              .png()
+              .toBuffer()
+          : await sharp(mathComposite)
+              .resize(fw, fh, { fit: "fill" })
+              .png()
+              .toBuffer();
         const fillMaskSmall = await sharp(fillMask)
           .resize(fw, fh, { fit: "fill" })
           .threshold(128)
@@ -675,10 +702,15 @@ async function processImage(
         const ringMask = await sharp(ringSvg).blur(bandW / 3).png().toBuffer();
 
         for (let attempt = 0; attempt < cfg.GENBG.maxAttempts; attempt++) {
-          const scene = await fillScene(
-            fillInput, fillMaskSmall, cfg.GENBG.prompt, cfg.GENBG.modelId,
-            CACHE_DIR, cli.useCache, cfg.GENBG.seed + attempt,
-          );
+          const scene = isGemini
+            ? await generateScene(
+                fillInput, cfg.GEMINI.maskPrefix + cfg.GENBG.prompt, cfg.GEMINI,
+                CACHE_DIR, cli.useCache, cfg.GENBG.seed + attempt,
+              )
+            : await fillScene(
+                fillInput, fillMaskSmall, cfg.GENBG.prompt, cfg.GENBG.modelId,
+                CACHE_DIR, cli.useCache, cfg.GENBG.seed + attempt,
+              );
           const sceneFull = await sharp(scene)
             .resize(cfg.CANVAS.width, cfg.CANVAS.height, { fit: "fill" })
             .png()
@@ -875,7 +907,8 @@ function printSummary(results: ImageResult[], cfg: Config): void {
   console.log(
     `SAM2-segm.:  ${aiStats.segmentCalls} calls, ${aiStats.segmentCacheHits} cache-hits (matte + ruiten)`,
   );
-  console.log(`FLUX Fill:   ${aiStats.fillCalls} calls, ${aiStats.fillCacheHits} cache-hits (scène)`);
+  const sceneLabel = cfg.GENBG.provider === "gemini" ? "Gemini NB" : "FLUX Fill";
+  console.log(`${sceneLabel}:   ${aiStats.fillCalls} FLUX + ${geminiStats.calls} Gemini calls, ${aiStats.fillCacheHits + geminiStats.cacheHits} cache-hits (scène)`);
   console.log(`OCR:         ${aiStats.ocrCalls} calls, ${aiStats.ocrCacheHits} cache-hits (tekst-poort)`);
 
   const byCode = new Map<string, string[]>();
@@ -895,13 +928,18 @@ function printSummary(results: ImageResult[], cfg: Config): void {
     console.log("geen waarschuwingen");
   }
 
+  const genbgCostPerCall =
+    cfg.GENBG.provider === "gemini" ? cfg.GEMINI.costPerCall : cfg.GENBG.costPerCall;
+  const genbgCallCount = cfg.GENBG.provider === "gemini"
+    ? geminiStats.calls
+    : aiStats.fillCalls;
   const runCost =
     maskStats.apiCalls * cfg.COST_PER_CALL_USD +
     maskStats.detectCalls * cfg.AI.costPerDetection +
     aiStats.detectCalls * cfg.AI.costPerDetection +
     aiStats.vlmCalls * cfg.AI.costPerQuery +
     aiStats.segmentCalls * cfg.AI.costPerSegment +
-    aiStats.fillCalls * cfg.GENBG.costPerCall +
+    genbgCallCount * genbgCostPerCall +
     aiStats.ocrCalls * cfg.AI.costPerDetection;
   const perImage =
     cfg.COST_PER_CALL_USD +
