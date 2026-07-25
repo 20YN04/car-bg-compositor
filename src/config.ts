@@ -580,10 +580,14 @@ export const defaultConfig: Config = {
   },
   PAINT: {
     enabled: true,
-    strength: 0.7,
+    // Gekalibreerd op de motorkap van de Taycan-set (2026-07-25): 79% van de
+    // lakpixels zit onder S=0,10 en is dus al neutraal; de groen-dominante
+    // boomreflecties hebben mediaan S=0,241 en p90 S=0,411. Met satFloor 0,18
+    // en een band van 0,12 kwam de mediane reflectie op maar 36% demping uit.
+    strength: 0.75,
     minValue: 24,
-    satFloor: 0.18,
-    satRamp: 0.12,
+    satFloor: 0.10,
+    satRamp: 0.06,
     satProtect: 0.75,
     hueTolerance: 40,
     achromaticSat: 0.18,
