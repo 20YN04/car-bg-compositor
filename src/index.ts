@@ -63,6 +63,7 @@ import { applyBranding } from "./branding.js";
 import { analyzePaint, dampEnvironmentReflections } from "./paint.js";
 import { auditComposite, auditWarnings, type CompositeAudit } from "./audit.js";
 import { classifyExterior, runQA, type QAWarning } from "./qa.js";
+import { activeOperations, buildProvenance, provenanceXmp } from "./provenance.js";
 
 const IN_DIR = "./in";
 const OUT_DIR = "./out";
@@ -239,6 +240,29 @@ async function resolveBackground(cli: CliOptions, cfg: Config): Promise<string> 
     await generateDefaultBackground(defaultBg, cfg.CANVAS);
   }
   return defaultBg;
+}
+
+/** JPEG schrijven met de herkomstregistratie in de EXIF-beschrijving. */
+async function withProvenance(
+  png: Buffer,
+  cfg: Config,
+  input: Parameters<typeof buildProvenance>[0],
+): Promise<Buffer> {
+  const record = buildProvenance(input, cfg);
+  return sharp(png)
+    .withMetadata({
+      exif: {
+        IFD0: {
+          ImageDescription: record["carbg:claim"] ?? "",
+          Software: "car-bg-compositor",
+        },
+      },
+    })
+    // de volledige registratie gaat in XMP: libvips schrijft alleen erkende
+    // EXIF-tags weg en liet een zelfbedachte sleutel stil vallen
+    .withXmp(provenanceXmp(record))
+    .jpeg({ quality: cfg.JPEG_QUALITY })
+    .toBuffer();
 }
 
 const warnedProfiles = new Set<string>();
@@ -1020,9 +1044,18 @@ async function processImage(
       : { image: composited, status: "off" as PlateStatus };
     plateStatus = anonymized.status;
     const branded = await applyBranding(anonymized.image, cfg.CANVAS, cfg.BRANDING);
-    outJpeg = await sharp(branded)
-      .jpeg({ quality: cfg.JPEG_QUALITY })
-      .toBuffer();
+    outJpeg = await withProvenance(branded, cfg, {
+      generative: genbgApplied,
+      models: genbgApplied
+        ? [cfg.GENBG.provider === "gemini" ? cfg.GEMINI.modelId : cfg.GENBG.modelId]
+        : [],
+      operations: activeOperations(cfg, {
+        windowsTinted: windowInfo.tintedPixels > 0,
+        plateAnonymised: plateStatus === "replaced" || plateStatus === "blurred",
+        paintDamped: paintDamped > 0,
+        composited: true,
+      }),
+    });
     const outName = path.parse(file).name + ".jpg";
     const outDir = path.join(OUT_DIR, path.parse(file).dir);
     await mkdir(outDir, { recursive: true });
@@ -1043,7 +1076,16 @@ async function processImage(
       .toBuffer();
     const graded = await applyFinish(framed, cfg.FINISH);
     const branded = await applyBranding(graded, cfg.CANVAS, cfg.BRANDING);
-    outJpeg = await sharp(branded).jpeg({ quality: cfg.JPEG_QUALITY }).toBuffer();
+    outJpeg = await withProvenance(branded, cfg, {
+      generative: false,
+      models: [],
+      operations: activeOperations(cfg, {
+        windowsTinted: false,
+        plateAnonymised: false,
+        paintDamped: false,
+        composited: false,
+      }),
+    });
     const outName = path.parse(file).name + ".jpg";
     const outDir = path.join(OUT_DIR, path.parse(file).dir);
     await mkdir(outDir, { recursive: true });
