@@ -59,6 +59,8 @@ import {
   type ChannelMeans,
 } from "./harmonize.js";
 import { applyBranding } from "./branding.js";
+import { analyzePaint, dampEnvironmentReflections } from "./paint.js";
+import { auditComposite, auditWarnings, type CompositeAudit } from "./audit.js";
 import { classifyExterior, runQA, type QAWarning } from "./qa.js";
 
 const IN_DIR = "./in";
@@ -514,6 +516,18 @@ async function processImage(
       data, alpha, width, height, car, bg, cfg.HARMONIZE, setReference,
     );
   }
+  // omgevingsreflecties in de lak dempen: glanzende lak spiegelt de plek waar
+  // de foto genomen is, dus een auto die onder bomen stond houdt een bomenrij
+  // op de motorkap. Verzadiging naar neutraal, helderheid ongemoeid — de vorm
+  // blijft, de kleur verdwijnt. Achterlichten en badges zijn beschermd.
+  let paintDamped = 0;
+  if (cfg.PAINT.enabled && analysis.bbox) {
+    const stats = analyzePaint(data, alpha, width, height, cfg.PAINT);
+    paintDamped = dampEnvironmentReflections(
+      data, alpha, width, height, stats, cfg.PAINT,
+    );
+  }
+
   // specular-compressie: felle reflecties van de oorspronkelijke tl-balken/
   // spots in de lak dempen zodat ze niet vloeken met de rustige studio-look
   let highlightPixels = 0;
@@ -1013,6 +1027,17 @@ async function processImage(
     await writeFile(path.join(outDir, outName), outJpeg);
   }
 
+  // objectieve maten op het eindbeeld: korrelverschil tussen auto en scene en
+  // hoeveel van de auto op zwart is dichtgeslagen. Kost niets en maakt van
+  // "ziet er uitgeknipt uit" een getal in run.jsonl.
+  let audit: CompositeAudit | null = null;
+  if (outJpeg && placement && compositeThisImage) {
+    audit = await auditComposite(outJpeg, placement, cfg.CANVAS);
+    for (const message of audit ? auditWarnings(audit) : []) {
+      warnings.push({ code: "COMPOSITE_AUDIT", message });
+    }
+  }
+
   // AI-kwaliteitscontrole: masker compleet? auto op de grond?
   if (cfg.AI.enabled && cfg.AI.qaChecks && cli.ai && analysis.bbox) {
     const flatCutout = await sharp(cutout)
@@ -1064,6 +1089,8 @@ async function processImage(
         groundFallback: analysis.groundFallback,
         windows: windowInfo,
         highlightPixels,
+        paintDamped,
+        audit,
         genbg: genbgApplied,
         exterior: classification.isExterior,
         exteriorScore: `${classification.score}/${classification.total}`,

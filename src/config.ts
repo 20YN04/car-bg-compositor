@@ -212,6 +212,34 @@ export interface FinishConfig {
   saturation: number; // 1 = neutraal
 }
 
+export interface PaintConfig {
+  /**
+   * Omgevingsreflecties in de lak dempen. Glanzende lak spiegelt de omgeving
+   * waarin de foto genomen is; een auto die onder bomen stond houdt een
+   * bomenrij op de motorkap, ook na achtergrondvervanging. Dat is het sterkste
+   * overgebleven signaal dat het beeld geen studio-opname is.
+   *
+   * We verwijderen niets — we trekken de verzadiging richting neutraal zodat
+   * groen bladerdek als kleurloze modulatie leest. De vorm blijft; dat is de
+   * bovengrens van deze aanpak zonder de lak te hertekenen.
+   */
+  enabled: boolean;
+  strength: number; // 0..1, hoeveel van de kleur weg
+  minValue: number; // onder deze helderheid is de tint ruis (0-255)
+  satFloor: number; // onder deze verzadiging is er niets te dempen
+  satRamp: number; // breedte van de invaarband boven satFloor
+  /**
+   * Boven deze verzadiging blijft alles onaangeroerd: achterlichten,
+   * badges en remklauwen zitten daar ruim boven, reflecties in donkere lak
+   * halen die verzadiging niet.
+   */
+  satProtect: number;
+  /** Graden rond de dominante lakkleur die als lak tellen, niet als omgeving. */
+  hueTolerance: number;
+  /** Onder deze mediane verzadiging geldt de auto als zwart/wit/grijs. */
+  achromaticSat: number;
+}
+
 export interface GrainConfig {
   /**
    * Korrel van de scene gelijktrekken met die van de auto. De auto draagt
@@ -356,6 +384,7 @@ export interface Config {
   PLATE: PlateConfig;
   WINDOWS: WindowsConfig;
   BRANDING: BrandingConfig;
+  PAINT: PaintConfig;
   GRAIN: GrainConfig;
   HIGHLIGHTS: HighlightConfig; // specular-compressie op de autolaag
   FINISH: FinishConfig; // grade op het eindbeeld
@@ -548,6 +577,16 @@ export const defaultConfig: Config = {
     strength: 0.35,
     maxGain: 0.12,
     setConsistent: true,
+  },
+  PAINT: {
+    enabled: true,
+    strength: 0.7,
+    minValue: 24,
+    satFloor: 0.18,
+    satRamp: 0.12,
+    satProtect: 0.75,
+    hueTolerance: 40,
+    achromaticSat: 0.18,
   },
   GRAIN: {
     enabled: true,

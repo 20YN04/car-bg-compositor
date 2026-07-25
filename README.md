@@ -129,6 +129,34 @@ beproefde pad. Controleer één beeld voordat je een batch draait — let vooral
 de box-conventie: de docs zeggen genormaliseerd `[cx, cy, w, h]`, `toAbsoluteBox`
 heeft daar een guard voor maar dat is nog niet tegen een echte respons getest.
 
+## Waarom een composiet "uitgeknipt" leest
+
+Drie meetbare oorzaken, alle drie mathematisch op te lossen — geen generatieve
+stap, geen API-call.
+
+| Signaal | Wat het is | Config |
+| --- | --- | --- |
+| Korrelverschil | de auto draagt cameraruis, de plate is glad. Gemeten 3,4× vóór de fix | `GRAIN` |
+| Dichtgeslagen zwart | een contrastcurve rond het middenpunt knipt de onderkant weg; een zwarte auto wordt een silhouet | `FINISH.toeKnee` |
+| Omgeving in de lak | glanzende lak spiegelt de plek waar de foto genomen is — bomen op de motorkap | `PAINT` |
+
+De eerste twee waren zelf veroorzaakt: een onvoorwaardelijke sharpen en een
+niet-verankerde grade. Beide gefixt.
+
+Het derde is fundamenteler. We verwijderen die reflecties niet — we trekken de
+verzadiging naar neutraal zodat groen bladerdek als kleurloze modulatie leest.
+De vórm blijft; dat is de bovengrens zonder de lak te hertekenen. De
+commerciële pipelines doen hetzelfde: Spyne noemt de stap "shadow and
+reflection reduction", niet replacement.
+
+Achterlichten, badges en remklauwen zijn beschermd via `PAINT.satProtect` —
+die zitten ruim boven de verzadiging die een reflectie in donkere lak haalt.
+
+`run.jsonl` bevat per beeld een `audit`-blok met de gemeten korrel op auto,
+vloer en wand plus de crush-fractie, zodat kwaliteit een getal is en geen
+mening. Bij een korrelverhouding boven 2× of onder 0,5×, of meer dan 40%
+dichtgeslagen, volgt een `COMPOSITE_AUDIT`-waarschuwing.
+
 ## Matte-model kiezen
 
 | Provider | Kwaliteit | Kosten | Draait |
