@@ -25,6 +25,90 @@ function hueSat(r: number, g: number, b: number): { hue: number; sat: number } {
   return { hue, sat };
 }
 
+/**
+ * Lokaal contrast per pixel: |L − boxblur(L)| op een middelgrote straal.
+ *
+ * Onderscheidt een gestructureerde reflectie (bladerdek, hekwerk, gebouwrand)
+ * van een gladde kleurzweem. Dat verschil is precies de vakregel uit de
+ * automotive retouche: *"You don't want to clean up the entire car's
+ * reflections, otherwise it will look pasted in — just the ones that are
+ * distracting."* Een egale zweem hoort te blijven staan; die leest als
+ * omgevingslicht. Herkenbare vormen zijn wat stoort.
+ *
+ * Middelgrote straal, niet 3×3: op pixelniveau meet je sensorruis, niet
+ * structuur. Bladerdek in lak zit op een schaal van tientallen pixels.
+ */
+export function localContrastMap(
+  rgba: Buffer,
+  alpha: Uint8Array,
+  width: number,
+  height: number,
+  radius: number,
+): Float32Array {
+  const n = width * height;
+  const lum = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const p = i * 4;
+    lum[i] = 0.2126 * (rgba[p] ?? 0) + 0.7152 * (rgba[p + 1] ?? 0) + 0.0722 * (rgba[p + 2] ?? 0);
+  }
+  // gescheiden boxblur: horizontaal, dan verticaal — O(n) i.p.v. O(n·r²)
+  const tmp = new Float32Array(n);
+  const blurred = new Float32Array(n);
+  for (let y = 0; y < height; y++) {
+    const row = y * width;
+    let sum = 0;
+    let count = 0;
+    for (let x = -radius; x <= radius; x++) {
+      if (x >= 0 && x < width) {
+        sum += lum[row + x] ?? 0;
+        count++;
+      }
+    }
+    for (let x = 0; x < width; x++) {
+      tmp[row + x] = sum / Math.max(1, count);
+      const out = x - radius;
+      const inn = x + radius + 1;
+      if (out >= 0) {
+        sum -= lum[row + out] ?? 0;
+        count--;
+      }
+      if (inn < width) {
+        sum += lum[row + inn] ?? 0;
+        count++;
+      }
+    }
+  }
+  for (let x = 0; x < width; x++) {
+    let sum = 0;
+    let count = 0;
+    for (let y = -radius; y <= radius; y++) {
+      if (y >= 0 && y < height) {
+        sum += tmp[y * width + x] ?? 0;
+        count++;
+      }
+    }
+    for (let y = 0; y < height; y++) {
+      blurred[y * width + x] = sum / Math.max(1, count);
+      const out = y - radius;
+      const inn = y + radius + 1;
+      if (out >= 0) {
+        sum -= tmp[out * width + x] ?? 0;
+        count--;
+      }
+      if (inn < height) {
+        sum += tmp[inn * width + x] ?? 0;
+        count++;
+      }
+    }
+  }
+  const contrast = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    if ((alpha[i] ?? 0) === 0) continue;
+    contrast[i] = Math.abs((lum[i] ?? 0) - (blurred[i] ?? 0));
+  }
+  return contrast;
+}
+
 /** Kleinste hoek tussen twee tinten op de kleurencirkel (0–180). */
 export function hueDistance(a: number, b: number): number {
   const d = Math.abs(((a - b) % 360 + 360) % 360);
@@ -112,6 +196,12 @@ export function dampEnvironmentReflections(
   cfg: PaintConfig,
 ): number {
   if (!cfg.enabled || cfg.strength <= 0) return 0;
+  // selectief, niet uniform: alleen gestructureerde reflecties dempen. Een
+  // egale kleurzweem leest als omgevingslicht en hoort te blijven — een auto
+  // zonder enige reflectie leest juist als geplakt.
+  const contrast = cfg.selective
+    ? localContrastMap(rgba, alpha, width, height, cfg.contrastRadius)
+    : null;
   let touched = 0;
   for (let i = 0; i < width * height; i++) {
     if ((alpha[i] ?? 0) === 0) continue;
@@ -134,7 +224,11 @@ export function dampEnvironmentReflections(
     }
     // vlak boven satFloor niets abrupts: lineair invaren over een band
     const ramp = Math.min(1, (sat - cfg.satFloor) / Math.max(1e-6, cfg.satRamp));
-    const amount = cfg.strength * w * ramp;
+    // structuurweging: vlak blijft staan, patroon wordt gedempt
+    const structure = contrast
+      ? Math.min(1, (contrast[i] ?? 0) / Math.max(1e-6, cfg.contrastFull))
+      : 1;
+    const amount = cfg.strength * w * ramp * structure;
     if (amount <= 0) continue;
 
     // naar de luminantie trekken, niet naar het maximumkanaal: dat laatste

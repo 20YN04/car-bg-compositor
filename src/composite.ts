@@ -383,12 +383,44 @@ export async function compositeImage(
     // bovenste cropH rijen (het dak) gespiegeld onder de wielen in plaats van
     // de onderkant van de auto.
     const flipped = await sharp(car).flip().png().toBuffer();
-    const reflection = await sharp(flipped)
+    const base = await sharp(flipped)
       .extract({ left: 0, top: 0, width: cropW, height: cropH })
       .composite([{ input: gradient, blend: "dest-in" }])
-      .blur(2)
       .png()
       .toBuffer();
+    // Oplopende blur naar beneden i.p.v. één uniforme. Een spiegeling in een
+    // vloer wordt onscherper met de afstand: microruwheid verstrooit het licht
+    // over een grotere hoek naarmate de weg langer is. Een even scherpe
+    // spiegeling over de hele diepte leest als een tweede laag, niet als een
+    // reflectie. Twee lagen met een verloop ertussen benaderen dat zonder de
+    // kosten van een echte per-rij blur.
+    const reflection = cfg.DOF.enabled
+      ? await sharp(base)
+          .blur(cfg.DOF.reflectionNearBlur)
+          .composite([
+            {
+              input: await sharp(base)
+                .blur(cfg.DOF.reflectionFarBlur)
+                .composite([
+                  {
+                    input: Buffer.from(
+                      `<svg width="${cropW}" height="${cropH}" xmlns="http://www.w3.org/2000/svg">` +
+                        `<defs><linearGradient id="d" x1="0" y1="0" x2="0" y2="1">` +
+                        `<stop offset="0" stop-color="white" stop-opacity="0"/>` +
+                        `<stop offset="1" stop-color="white" stop-opacity="1"/>` +
+                        `</linearGradient></defs>` +
+                        `<rect width="100%" height="100%" fill="url(#d)"/></svg>`,
+                    ),
+                    blend: "dest-in",
+                  },
+                ])
+                .png()
+                .toBuffer(),
+            },
+          ])
+          .png()
+          .toBuffer()
+      : await sharp(base).blur(2).png().toBuffer();
     layers.push({ input: reflection, left, top: rect.top });
   }
 

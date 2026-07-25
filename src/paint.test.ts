@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { defaultConfig } from "./config.js";
-import { analyzePaint, dampEnvironmentReflections, hueDistance } from "./paint.js";
+import {
+  analyzePaint,
+  dampEnvironmentReflections,
+  hueDistance,
+  localContrastMap,
+} from "./paint.js";
 
 const CFG = defaultConfig.PAINT;
 
@@ -14,6 +19,11 @@ function pixel(r: number, g: number, b: number) {
   return { rgba, alpha: new Uint8Array([255]) };
 }
 
+// Deze helper toetst de KLEURlogica (tint, verzadiging, bescherming) op één
+// pixel. De structuurweging staat daarbij uit: een enkele pixel heeft per
+// definitie geen lokaal contrast, dus selectief dempen zou hier altijd nul
+// opleveren en niets zeggen over de kleurmath. De selectieve weging heeft
+// eigen tests hieronder.
 function damp(
   r: number,
   g: number,
@@ -21,7 +31,7 @@ function damp(
   stats = { dominantHue: 0, medianSat: 0.02, achromatic: true },
 ): [number, number, number] {
   const { rgba, alpha } = pixel(r, g, b);
-  dampEnvironmentReflections(rgba, alpha, 1, 1, stats, CFG);
+  dampEnvironmentReflections(rgba, alpha, 1, 1, stats, { ...CFG, selective: false });
   return [rgba[0]!, rgba[1]!, rgba[2]!];
 }
 
@@ -124,5 +134,70 @@ describe("dampEnvironmentReflections", () => {
     );
     expect(n).toBe(0);
     expect([rgba[0], rgba[1], rgba[2]]).toEqual([30, 55, 25]);
+  });
+});
+
+describe("selectieve demping", () => {
+  /** n×n vlak met optioneel een gestreept patroon erin. */
+  function field(n: number, base: [number, number, number], striped: boolean) {
+    const rgba = Buffer.alloc(n * n * 4);
+    const alpha = new Uint8Array(n * n).fill(255);
+    for (let i = 0; i < n * n; i++) {
+      const x = i % n;
+      // strepen van 4px: structuur op dezelfde schaal als bladerdek
+      const lift = striped && Math.floor(x / 4) % 2 === 0 ? 26 : 0;
+      rgba[i * 4] = Math.min(255, base[0] + lift);
+      rgba[i * 4 + 1] = Math.min(255, base[1] + lift);
+      rgba[i * 4 + 2] = Math.min(255, base[2] + lift);
+      rgba[i * 4 + 3] = 255;
+    }
+    return { rgba, alpha };
+  }
+
+  const STATS = { dominantHue: 0, medianSat: 0.02, achromatic: true };
+
+  it("meet vlak als laag contrast en patroon als hoog", () => {
+    const n = 48;
+    const flat = field(n, [40, 70, 35], false);
+    const pat = field(n, [40, 70, 35], true);
+    const mean = (m: Float32Array) => m.reduce((s, v) => s + v, 0) / m.length;
+    const cFlat = mean(localContrastMap(flat.rgba, flat.alpha, n, n, 6));
+    const cPat = mean(localContrastMap(pat.rgba, pat.alpha, n, n, 6));
+    expect(cPat).toBeGreaterThan(cFlat * 4);
+  });
+
+  it("dempt een gestructureerde reflectie sterker dan een egale zweem", () => {
+    const n = 48;
+    const flat = field(n, [40, 70, 35], false);
+    const pat = field(n, [40, 70, 35], true);
+    const satOf = (o: { rgba: Buffer }, i: number) => {
+      const p = i * 4;
+      const c = [o.rgba[p]!, o.rgba[p + 1]!, o.rgba[p + 2]!];
+      const mx = Math.max(...c);
+      return mx === 0 ? 0 : (mx - Math.min(...c)) / mx;
+    };
+    const centre = (n / 2) * n + n / 2;
+    const satFlatBefore = satOf(flat, centre);
+    const satPatBefore = satOf(pat, centre);
+
+    dampEnvironmentReflections(flat.rgba, flat.alpha, n, n, STATS, CFG);
+    dampEnvironmentReflections(pat.rgba, pat.alpha, n, n, STATS, CFG);
+
+    const droppedFlat = satFlatBefore - satOf(flat, centre);
+    const droppedPat = satPatBefore - satOf(pat, centre);
+    expect(droppedPat).toBeGreaterThan(droppedFlat);
+  });
+
+  it("uniform dempen blijft beschikbaar via selective: false", () => {
+    const n = 48;
+    const a = field(n, [40, 70, 35], false);
+    const b = field(n, [40, 70, 35], false);
+    const nSel = dampEnvironmentReflections(a.rgba, a.alpha, n, n, STATS, CFG);
+    const nUni = dampEnvironmentReflections(b.rgba, b.alpha, n, n, STATS, {
+      ...CFG,
+      selective: false,
+    });
+    // uniform raakt minstens zoveel pixels als selectief
+    expect(nUni).toBeGreaterThanOrEqual(nSel);
   });
 });

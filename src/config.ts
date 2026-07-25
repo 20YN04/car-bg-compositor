@@ -238,6 +238,28 @@ export interface PaintConfig {
   hueTolerance: number;
   /** Onder deze mediane verzadiging geldt de auto als zwart/wit/grijs. */
   achromaticSat: number;
+  /**
+   * Alleen gestructureerde reflecties dempen (bladerdek, hekwerk), niet een
+   * egale kleurzweem. De vakregel uit de automotive retouche is expliciet:
+   * ruim niet alle reflecties op, want dan leest de auto als geplakt — alleen
+   * de storende. Uniform dempen was een ontwerpfout.
+   */
+  selective: boolean;
+  contrastRadius: number; // straal van de lokaal-contrastmeting in px
+  contrastFull: number; // lokaal contrast waarbij de volle demping geldt
+}
+
+export interface DofConfig {
+  /**
+   * Dieptescherpte benaderen. Twee dingen verraden een composiet: alles even
+   * scherp (een echte lens heeft altijd afval), en een vloerreflectie die over
+   * de hele diepte even scherp is. Microruwheid in de vloer verstrooit het
+   * licht sterker naarmate de weg langer is, dus een spiegeling hoort naar
+   * achteren onscherper te worden.
+   */
+  enabled: boolean;
+  reflectionNearBlur: number; // vlak onder de contactlijn
+  reflectionFarBlur: number; // onderaan de reflectie
 }
 
 export interface LightWrapConfig {
@@ -422,6 +444,7 @@ export interface Config {
   PLATE: PlateConfig;
   WINDOWS: WindowsConfig;
   BRANDING: BrandingConfig;
+  DOF: DofConfig;
   LIGHTWRAP: LightWrapConfig;
   PAINT: PaintConfig;
   GRAIN: GrainConfig;
@@ -619,6 +642,11 @@ export const defaultConfig: Config = {
     maxGain: 0.12,
     setConsistent: true,
   },
+  DOF: {
+    enabled: true,
+    reflectionNearBlur: 1.5,
+    reflectionFarBlur: 7,
+  },
   LIGHTWRAP: {
     enabled: true,
     width: 6,
@@ -638,6 +666,9 @@ export const defaultConfig: Config = {
     satProtect: 0.75,
     hueTolerance: 40,
     achromaticSat: 0.18,
+    selective: true,
+    contrastRadius: 6,
+    contrastFull: 6,
   },
   GRAIN: {
     enabled: true,
