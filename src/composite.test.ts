@@ -398,3 +398,26 @@ describe("sweepLuminance tegen de gemeten referentie", () => {
     }
   });
 });
+
+describe("computeReflectionRect met een gebroken contactlijn", () => {
+  const CANVAS = { width: 1248, height: 832 };
+  const PLACEMENT = { x: 100.4, y: 200.2, width: 900.7, height: 500.3 };
+
+  it("levert gehele getallen, ook als de reflectie de onderrand raakt", () => {
+    // contactY komt uit de wielmeting en is zelden rond. Zolang de reflectie
+    // ruim boven de onderrand eindigt valt dat niet op, want dan wint de
+    // afgeronde hoogte de Math.min. Zodra hij de rand raakt wint de clamp en
+    // gaat er een gebroken hoogte naar sharp — die weigert dat.
+    const r = computeReflectionRect(PLACEMENT, 649.68, CANVAS, 0.5);
+    expect(r).not.toBeNull();
+    for (const [k, v] of Object.entries(r!)) {
+      expect(Number.isInteger(v), `${k} is ${v}`).toBe(true);
+    }
+  });
+
+  it("blijft binnen het canvas", () => {
+    const r = computeReflectionRect(PLACEMENT, 649.68, CANVAS, 0.5)!;
+    expect(r.top + r.height).toBeLessThanOrEqual(CANVAS.height);
+    expect(r.left + r.width).toBeLessThanOrEqual(CANVAS.width);
+  });
+});

@@ -216,9 +216,13 @@ export function computeReflectionRect(
     Math.round(placement.width),
     canvas.width - left,
   );
-  const visibleHeight = Math.min(height, canvas.height - contactY);
+  // contactY komt uit de wielmeting en is zelden rond. Eerst afronden, dán
+  // klemmen: andersom levert de clamp een gebroken hoogte zodra de reflectie
+  // de onderrand raakt, en sharp weigert die.
+  const top = Math.round(contactY);
+  const visibleHeight = Math.min(height, canvas.height - top);
   if (visibleHeight <= 2 || width <= 0) return null;
-  return { left, top: contactY, width, height: visibleHeight };
+  return { left, top, width, height: visibleHeight };
 }
 
 export interface CompositeInput {
