@@ -204,9 +204,24 @@ export interface FinishConfig {
    */
   enabled: boolean;
   contrast: number; // 1 = neutraal; 1.1 = zachte S
-  blackLift: number; // negatief = diepere zwarten (op 0-255)
+  /** Negatief = diepere zwarten. Werkt als zachte toe, niet als vlakke aftrek. */
+  blackLift: number;
+  /** Bovengrens van de toe: daarboven blijft de grade onaangeroerd. */
+  toeKnee: number;
   warmth: number; // 0 = neutraal; 0.01 = subtiel warm
   saturation: number; // 1 = neutraal
+}
+
+export interface GrainConfig {
+  /**
+   * Korrel van de scene gelijktrekken met die van de auto. De auto draagt
+   * cameraruis, de plate is glad; dat verschil leest als "uitgeknipt" ook bij
+   * een perfecte rand. We voegen ruis toe aan de scene i.p.v. de auto te
+   * verzachten — detail behouden is de kernbelofte.
+   */
+  enabled: boolean;
+  strength: number; // 0..1 op het berekende verschil
+  seed: number; // deterministisch, anders is geen uitvoertest reproduceerbaar
 }
 
 export interface HighlightConfig {
@@ -341,6 +356,7 @@ export interface Config {
   PLATE: PlateConfig;
   WINDOWS: WindowsConfig;
   BRANDING: BrandingConfig;
+  GRAIN: GrainConfig;
   HIGHLIGHTS: HighlightConfig; // specular-compressie op de autolaag
   FINISH: FinishConfig; // grade op het eindbeeld
   GENBG: GenBgConfig; // hybride generatieve scène rond de beschermde auto
@@ -533,6 +549,11 @@ export const defaultConfig: Config = {
     maxGain: 0.12,
     setConsistent: true,
   },
+  GRAIN: {
+    enabled: true,
+    strength: 0.9,
+    seed: 20260725,
+  },
   HIGHLIGHTS: {
     enabled: true,
     knee: 200, // ondergrens; schuift adaptief mee met de autohelderheid
@@ -542,6 +563,7 @@ export const defaultConfig: Config = {
     enabled: true,
     contrast: 1.1,
     blackLift: -7,
+    toeKnee: 64,
     warmth: 0.006,
     saturation: 1.05,
   },

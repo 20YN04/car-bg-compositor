@@ -47,6 +47,44 @@ export function cutoutMeans(
   return { r: r / w, g: g / w, b: b / w };
 }
 
+/**
+ * Hoogfrequente energie: gemiddelde afwijking t.o.v. het 3×3-gemiddelde. Een
+ * praktische maat voor sensorkorrel, ongevoelig voor de vorm van het beeld.
+ */
+export function grainLevel(
+  grey: Uint8Array | Buffer,
+  width: number,
+  x0: number,
+  y0: number,
+  w: number,
+  h: number,
+): number {
+  let sum = 0;
+  let n = 0;
+  for (let y = y0; y < y0 + h; y++) {
+    for (let x = x0; x < x0 + w; x++) {
+      let mean = 0;
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) mean += grey[(y + dy) * width + (x + dx)] ?? 0;
+      }
+      sum += Math.abs((grey[y * width + x] ?? 0) - mean / 9);
+      n++;
+    }
+  }
+  return n > 0 ? sum / n : 0;
+}
+
+/**
+ * Ruis die nodig is om `plate` op het niveau van `car` te brengen. Ruis telt
+ * in kwadratuur op, dus de toe te voegen standaardafwijking volgt uit het
+ * verschil van de kwadraten. De deler corrigeert dat `grainLevel` een
+ * gemiddelde absolute afwijking meet en geen standaardafwijking.
+ */
+export function grainGapSigma(carGrain: number, plateGrain: number): number {
+  if (carGrain <= plateGrain) return 0;
+  return Math.sqrt(carGrain * carGrain - plateGrain * plateGrain) / 0.94;
+}
+
 export interface Gains {
   r: number;
   g: number;
@@ -214,15 +252,52 @@ export async function applyFinish(
   cfg: FinishConfig,
 ): Promise<Buffer> {
   if (!cfg.enabled) return png;
-  const c = cfg.contrast;
-  const offset = 128 * (1 - c) + cfg.blackLift;
+  const lut = buildFinishLut(cfg);
+  const { data, info } = await sharp(png).raw().toBuffer({ resolveWithObject: true });
+  for (let i = 0; i < data.length; i += info.channels) {
+    for (let ch = 0; ch < Math.min(3, info.channels); ch++) {
+      data[i + ch] = lut[data[i + ch] ?? 0] ?? 0;
+    }
+  }
   const gains = [1 + cfg.warmth, 1, 1 - cfg.warmth];
-  return sharp(png)
-    .linear(
-      gains.map((g) => g * c),
-      gains.map(() => offset),
-    )
+  return sharp(data, {
+    raw: { width: info.width, height: info.height, channels: info.channels },
+  })
+    .linear(gains, [0, 0, 0])
     .modulate({ saturation: cfg.saturation })
     .png()
     .toBuffer();
+}
+
+/**
+ * Eén opzoektabel voor de hele grade: contrast-S plus zwart-toe.
+ *
+ * Beide zijn verankerd op 0 en 255, want de vorige versie was dat niet en
+ * knipte daardoor de onderkant weg. Een contrast rond het middenpunt
+ * (v·c + 128(1−c)) stuurt bij c=1,1 alles onder waarde 11,6 naar nul, en de
+ * vlakke blackLift-aftrek deed daar nog eens 7 bovenop. Op de Taycan-set ging
+ * het aandeel autopaneel onder waarde 12 daardoor van 17% in de bron naar 53%
+ * in de uitvoer: een zwarte auto werd een silhouet zonder paneelscheiding, en
+ * dat is een van de dingen die een composiet als "uitgeknipt" laten lezen.
+ *
+ *   contrast: x' = x + (c−1)·(smoothstep(x) − x)   met smoothstep = x²(3−2x)
+ *             smoothstep(0)=0 en smoothstep(1)=1, dus beide uiteinden liggen vast
+ *   toe:      v' = v − D·(1 − v/K)²                voor v < K
+ *             afgeleide 1 + 2D(1−v/K)/K > 0, dus monotoon: twee verschillende
+ *             invoerwaarden komen nooit op dezelfde uitvoerwaarde uit
+ */
+export function buildFinishLut(cfg: FinishConfig): Uint8Array {
+  const lut = new Uint8Array(256);
+  const depth = Math.max(0, -cfg.blackLift); // blackLift negatief = dieper
+  for (let v = 0; v < 256; v++) {
+    const x = v / 255;
+    const s = x * x * (3 - 2 * x);
+    let out = 255 * (x + (cfg.contrast - 1) * (s - x));
+    if (out < cfg.toeKnee && depth > 0) {
+      const t = 1 - out / cfg.toeKnee;
+      out -= depth * t * t;
+    }
+    lut[v] = Math.max(0, Math.min(255, Math.round(out)));
+  }
+  return lut;
 }

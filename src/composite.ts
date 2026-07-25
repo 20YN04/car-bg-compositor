@@ -1,5 +1,6 @@
 import sharp from "sharp";
 import type { BBox, ContactCluster } from "./bbox.js";
+import { grainGapSigma, grainLevel } from "./harmonize.js";
 import type { BackgroundProfile, CanvasSize, Config } from "./config.js";
 
 export interface Placement {
@@ -313,9 +314,16 @@ export async function compositeImage(
       height: bbox.bottom - bbox.top + 1,
     })
     .resize(scaledW, scaledH);
-  // het her-schalen verzacht; een milde sharpen houdt de outline en details strak
-  if (cfg.CAR_SHARPEN_SIGMA > 0) {
-    carPipe = carPipe.sharpen({ sigma: cfg.CAR_SHARPEN_SIGMA });
+  // Sharpen alleen bij een échte vergroting. Opschalen verzacht, en daar wint
+  // een milde sharpen detail terug. Bij gelijke schaal of verkleining wint hij
+  // niets en versterkt hij alleen sensorruis: gemeten op de Taycan-set ging de
+  // korrel van 1,5 in de bron naar 5,75 in de uitvoer, tegen 0,3 op de
+  // achtergrondplate. Dat korrelverschil is precies wat een composiet als
+  // "uitgeknipt" laat lezen.
+  if (cfg.CAR_SHARPEN_SIGMA > 0 && placement.scale > 1.05) {
+    // bij 2× opschalen de volle sigma, daaronder evenredig minder
+    const amount = Math.min(1, (placement.scale - 1.05) / 0.95);
+    carPipe = carPipe.sharpen({ sigma: cfg.CAR_SHARPEN_SIGMA * amount });
   }
   let car = await carPipe.png().toBuffer();
 
@@ -385,8 +393,126 @@ export async function compositeImage(
   }
 
   layers.push({ input: car, left, top });
-  const image = await sharp(background).composite(layers).png().toBuffer();
+  let image = await sharp(background).composite(layers).png().toBuffer();
+
+  if (cfg.GRAIN.enabled) {
+    image = await matchBackgroundGrain(
+      image,
+      car,
+      { left, top, width: scaledW, height: scaledH },
+      canvas,
+      cfg,
+    );
+  }
   return { image, carLayer: { input: car, left, top } };
+}
+
+/**
+ * Korrel gelijktrekken tussen auto en plate.
+ *
+ * De auto komt van een cameraruis-dragende opname, de plate is glad. Gemeten
+ * op de Taycan-set: paneel 3,9 tegen vloer 1,2 en wand 0,3. Dat verschil in
+ * ruisniveau is een van de sterkste signalen dat twee lagen niet uit dezelfde
+ * opname komen — het oog leest het als uitgeknipt, ook als de rand perfect is.
+ *
+ * We voegen ruis toe aan de scène, niet aan de auto: de auto verzachten zou
+ * detail kosten en dat is precies wat deze pipeline belooft te behouden.
+ * De ruis gaat er vóór de finishing grade overheen, zodat beide lagen daarna
+ * dezelfde curve krijgen en in de pas blijven.
+ */
+async function matchBackgroundGrain(
+  image: Buffer,
+  car: Buffer,
+  carRect: { left: number; top: number; width: number; height: number },
+  canvas: CanvasSize,
+  cfg: Config,
+): Promise<Buffer> {
+  const grey = await sharp(image).greyscale().raw().toBuffer();
+
+  // meetvenster op de auto: ruim binnen de bbox, weg van de randen
+  const inset = (r: typeof carRect, f: number) => ({
+    x: Math.round(r.left + r.width * f),
+    y: Math.round(r.top + r.height * f),
+    w: Math.max(8, Math.round(r.width * (1 - 2 * f))),
+    h: Math.max(8, Math.round(r.height * (1 - 2 * f))),
+  });
+  const carWin = inset(carRect, 0.3);
+  const carGrain = grainLevel(grey, canvas.width, carWin.x, carWin.y, carWin.w, carWin.h);
+
+  // meetvenster op de plate: linkerstrook, buiten de auto
+  const bgW = Math.max(16, Math.min(240, Math.round(carRect.left * 0.6)));
+  const plateGrain =
+    bgW >= 16
+      ? grainLevel(grey, canvas.width, 8, Math.round(canvas.height * 0.25), bgW, 200)
+      : 0;
+
+  const sigma = grainGapSigma(carGrain, plateGrain) * cfg.GRAIN.strength;
+  if (sigma < 0.5) return image;
+
+  // deterministische ruis: dezelfde invoer geeft hetzelfde beeld, anders is
+  // geen enkele regressietest op de uitvoer nog betrouwbaar
+  const n = canvas.width * canvas.height;
+  const noise = Buffer.alloc(n * 4);
+  let seed = cfg.GRAIN.seed >>> 0;
+  const rnd = (): number => {
+    // xorshift32
+    seed ^= seed << 13;
+    seed >>>= 0;
+    seed ^= seed >> 17;
+    seed ^= seed << 5;
+    seed >>>= 0;
+    return seed / 0xffffffff;
+  };
+  for (let i = 0; i < n; i++) {
+    // Box-Muller voor normaalverdeelde ruis; uniform zou als dither lezen
+    const u = Math.max(1e-6, rnd());
+    const v = rnd();
+    const g = Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v) * sigma;
+    const c = Math.max(0, Math.min(255, Math.round(128 + g)));
+    noise[i * 4] = c;
+    noise[i * 4 + 1] = c;
+    noise[i * 4 + 2] = c;
+    noise[i * 4 + 3] = 255;
+  }
+  const noisePng = await sharp(noise, {
+    raw: { width: canvas.width, height: canvas.height, channels: 4 },
+  })
+    .png()
+    .toBuffer();
+
+  // 128 is neutraal voor overlay-blending. Dat neutrale vlak moet exact de
+  // AUTOVORM volgen, niet zijn bounding box: op de bbox maskeren laat een
+  // zichtbare lichtere rechthoek rond de auto achter, want binnen die box
+  // kwam geen korrel en erbuiten wel.
+  const meta = await sharp(car).metadata();
+  const shapeW = meta.width ?? carRect.width;
+  const shapeH = meta.height ?? carRect.height;
+  const neutralShape = await sharp({
+    create: {
+      width: shapeW,
+      height: shapeH,
+      channels: 4,
+      background: { r: 128, g: 128, b: 128, alpha: 1 },
+    },
+  })
+    .composite([
+      {
+        input: await sharp(car).ensureAlpha().extractChannel(3).png().toBuffer(),
+        blend: "dest-in",
+      },
+    ])
+    .png()
+    .toBuffer();
+
+  const maskedNoise = await sharp(noisePng)
+    .composite([{ input: neutralShape, left: carRect.left, top: carRect.top }])
+    .png()
+    .toBuffer();
+
+  return sharp(image)
+    .composite([{ input: maskedNoise, blend: "overlay" }])
+    .png()
+    .toBuffer();
 }
 
 /**

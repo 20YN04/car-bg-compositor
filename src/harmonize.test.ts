@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
+import sharp from "sharp";
 import {
   compressHighlights,
   cutoutMeans,
   harmonizeColors,
   medianMeans,
+  applyFinish,
+  grainLevel,
+  grainGapSigma,
 } from "./harmonize.js";
 
 const CFG = { enabled: true, strength: 0.35, maxGain: 0.12, setConsistent: false };
@@ -180,5 +184,90 @@ describe("compressHighlights", () => {
     const { rgba, alpha } = speckledCar([255, 255, 255]);
     expect(compressHighlights(rgba, alpha, 10, 10, { ...cfg, enabled: false })).toBe(0);
     expect(rgba[0]).toBe(255);
+  });
+});
+
+describe("applyFinish — zachte toe i.p.v. vlakke aftrek", () => {
+  const CFG = {
+    enabled: true,
+    contrast: 1.1,
+    blackLift: -7,
+    toeKnee: 64,
+    warmth: 0,
+    saturation: 1,
+  };
+
+  async function grade(values: number[]): Promise<number[]> {
+    const rgba = Buffer.alloc(values.length * 3);
+    values.forEach((v, i) => {
+      rgba[i * 3] = v;
+      rgba[i * 3 + 1] = v;
+      rgba[i * 3 + 2] = v;
+    });
+    const png = await sharp(rgba, {
+      raw: { width: values.length, height: 1, channels: 3 },
+    })
+      .png()
+      .toBuffer();
+    const { data, info } = await sharp(await applyFinish(png, CFG))
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    return values.map((_, i) => data[i * info.channels] ?? 0);
+  }
+
+  it("knijpt donkere waarden niet allemaal op nul", async () => {
+    // met de oude vlakke aftrek (offset −19,8) gingen 8, 12 en 18 allemaal
+    // naar 0 en was elke paneelscheiding in donkere lak weg
+    const out = await grade([4, 8, 12, 18, 24]);
+    const distinct = new Set(out);
+    expect(distinct.size).toBeGreaterThan(3);
+    expect(out[4]!).toBeGreaterThan(0);
+  });
+
+  it("is monotoon: donkerder blijft donkerder", async () => {
+    const input = [0, 5, 10, 20, 40, 64, 100, 160, 220, 255];
+    const out = await grade(input);
+    for (let i = 1; i < out.length; i++) {
+      expect(out[i]!).toBeGreaterThanOrEqual(out[i - 1]!);
+    }
+  });
+
+  it("verankert de curve op 0 en 255", async () => {
+    // een contrast rond het middenpunt knipte de onderkant weg; de S-curve
+    // laat beide uiteinden op hun plaats
+    const out = await grade([0, 255]);
+    expect(out[0]!).toBe(0);
+    expect(out[1]!).toBe(255);
+  });
+
+  it("verhoogt het contrast in de middentonen", async () => {
+    const out = await grade([80, 176]);
+    expect(out[0]!).toBeLessThan(80);
+    expect(out[1]!).toBeGreaterThan(176);
+  });
+});
+
+describe("korrel gelijktrekken", () => {
+  it("grainLevel meet vlak als nul en ruis als positief", () => {
+    const W = 40, H = 40;
+    const flat = new Uint8Array(W * H).fill(120);
+    expect(grainLevel(flat, W, 5, 5, 30, 30)).toBeCloseTo(0, 5);
+
+    const noisy = new Uint8Array(W * H);
+    for (let i = 0; i < noisy.length; i++) noisy[i] = i % 2 ? 130 : 110;
+    expect(grainLevel(noisy, W, 5, 5, 30, 30)).toBeGreaterThan(5);
+  });
+
+  it("grainGapSigma is nul wanneer de plate al korreliger is dan de auto", () => {
+    // niets toevoegen: ruis eraf halen zou detail kosten
+    expect(grainGapSigma(1.0, 4.0)).toBe(0);
+    expect(grainGapSigma(4.0, 4.0)).toBe(0);
+  });
+
+  it("grainGapSigma telt in kwadratuur, niet lineair", () => {
+    // ruis telt op als sqrt(a² + b²); een lineair verschil zou overschieten
+    const sigma = grainGapSigma(5, 3);
+    expect(sigma).toBeCloseTo(Math.sqrt(25 - 9) / 0.94, 5);
+    expect(sigma).toBeLessThan((5 - 3) * 3);
   });
 });
