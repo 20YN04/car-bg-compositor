@@ -150,7 +150,18 @@ describe("runQA", () => {
 
 describe("classifyExterior", () => {
   const MIN = defaultConfig.ROUTING.minExteriorSignals;
-  const classify = (input: QAInput) => classifyExterior(input, defaultConfig, MIN);
+  const classify = (input: QAInput) =>
+    classifyExterior(
+      {
+        analysis: input.analysis,
+        imgWidth: input.imgWidth,
+        imgHeight: input.imgHeight,
+        detectionEnabled: input.detection.enabled,
+        detectionFound: input.detection.found,
+      },
+      defaultConfig,
+      MIN,
+    );
 
   it("herkent een schone exterieuropname", () => {
     const c = classify(baseInput());

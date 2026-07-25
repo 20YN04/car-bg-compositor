@@ -20,6 +20,7 @@ import {
   compositeImage,
   computePlacement,
   generateDefaultBackground,
+  scaleFromWheel,
   type Placement,
 } from "./composite.js";
 import { defaultConfig, type Config } from "./config.js";
@@ -470,12 +471,80 @@ async function processImage(
   if (!cfg.BACKGROUND_PROFILES[bgName] && bgName !== "default.png") {
     warnProfileMissing(bgName);
   }
+  const classification = classifyExterior(
+    {
+      analysis,
+      imgWidth: width,
+      imgHeight: height,
+      detectionEnabled: useDetect,
+      detectionFound: detection !== null,
+    },
+    cfg,
+    cfg.ROUTING.minExteriorSignals,
+  );
+  const compositeThisImage = !cfg.ROUTING.enabled || classification.isExterior;
+
+  // wielposities via detectie: contour-geometrie mist verre wielen die
+  // nauwelijks onder de onderbodemlijn uitsteken (RVV-achterwiel)
+  let shadowClusters = analysis.contactClusters;
+  let measuredWheels: PlateBox[] = [];
+  if (cli.ai && analysis.bbox && compositeThisImage) {
+    try {
+      const rawWheels =
+        cfg.SEGMENT.provider === "sam3"
+          ? (
+              await segmentByText(
+                inputBytes, cfg.SEGMENT.prompts.wheels, CACHE_DIR, cfg.SEGMENT, cli.useCache,
+              )
+            ).boxes
+          : await detectWheels(inputBytes, CACHE_DIR, cfg.AI, cli.useCache);
+      const wheelBoxes = filterBoxesOnCar(
+        rawWheels.filter(
+          (w) =>
+            w.w * w.h <=
+              0.15 *
+                (analysis.bbox!.right - analysis.bbox!.left + 1) *
+                (analysis.bbox!.bottom - analysis.bbox!.top + 1) &&
+            w.w <= 0.35 * (analysis.bbox!.right - analysis.bbox!.left + 1),
+        ),
+        alpha, width, height, cfg.ALPHA_THRESHOLD,
+      );
+      const detected = clustersFromWheelBoxes(
+        wheelBoxes, alpha, width, height, analysis.bbox, cfg.ALPHA_THRESHOLD,
+      );
+      if (detected.length > 0) shadowClusters = detected;
+      measuredWheels = wheelBoxes;
+    } catch (err) {
+      noteFalFailure(err);
+      console.warn(
+        `  ⚠ ${file}: wieldetectie overgeslagen: ${err instanceof Error ? err.message : err}`,
+      );
+    }
+  }
+
+
   const preset = cli.preset ? cfg.PRESETS[cli.preset] : undefined;
   const contactY =
     cli.groundYOverride ?? preset?.contactTargetY ?? profile.contactTargetY;
   const spanMeters = preset?.spanMeters ?? profile.carWidthMeters;
+  // schaal op de gemeten wieldiameter; zonder bruikbaar wiel terugvallen op de
+  // oude bbox-breedte, die van de kijkhoek afhangt en dus per hoek verschilt
+  const wheelScale =
+    cfg.WHEEL_DIAMETER_M > 0 && analysis.bbox
+      ? scaleFromWheel(
+          measuredWheels,
+          cfg.WHEEL_DIAMETER_M * cfg.FRAMING_GAIN,
+          profile.floorScaleRef,
+        )
+      : null;
+  const bboxWidthPx = analysis.bbox
+    ? analysis.bbox.right - analysis.bbox.left + 1
+    : cfg.CANVAS.width;
   const widthRatio =
-    cli.carWidthOverride ?? (spanMeters * profile.floorScaleRef) / cfg.CANVAS.width;
+    cli.carWidthOverride ??
+    (wheelScale !== null
+      ? (wheelScale * bboxWidthPx) / cfg.CANVAS.width
+      : (spanMeters * profile.floorScaleRef) / cfg.CANVAS.width);
 
   // aangesmolten slagschaduw onder de wiellijn uit het masker snijden, zodat
   // die niet als grijze appendage onder de auto in het eindbeeld belandt
@@ -686,20 +755,6 @@ async function processImage(
   // geen grondlijn en geen wielcontact; die op de studiovloer plakken levert
   // een dashboard dat in een showroom zweeft — en dat werd tot nu toe gewoon
   // weggeschreven. Kost niets: alle signalen zijn al berekend voor de QA.
-  const classification = classifyExterior(
-    {
-      analysis,
-      imgWidth: width,
-      imgHeight: height,
-      placement,
-      cleanRemovedArea,
-      detection: { enabled: useDetect, found: detection !== null, outsideBoxRemoved },
-      plate: { enabled: plateEnabled, found: plates.length > 0 },
-    },
-    cfg,
-    cfg.ROUTING.minExteriorSignals,
-  );
-  const compositeThisImage = !cfg.ROUTING.enabled || classification.isExterior;
   if (!compositeThisImage) {
     const failed = classification.signals.filter((s) => !s.ok).map((s) => s.name);
     warnings.push({
@@ -720,42 +775,6 @@ async function processImage(
         `grondtrim geklemd op ${Math.round(cfg.GROUND_TRIM_MAX_RATIO * 100)}% van de bboxhoogte ` +
         `(gevraagd: ${analysis.groundTrim}px) — mogelijk carrosserie onder de wiellijn`,
     });
-  }
-
-  // wielposities via detectie: contour-geometrie mist verre wielen die
-  // nauwelijks onder de onderbodemlijn uitsteken (RVV-achterwiel)
-  let shadowClusters = analysis.contactClusters;
-  if (cli.ai && analysis.bbox && compositeThisImage) {
-    try {
-      const rawWheels =
-        cfg.SEGMENT.provider === "sam3"
-          ? (
-              await segmentByText(
-                inputBytes, cfg.SEGMENT.prompts.wheels, CACHE_DIR, cfg.SEGMENT, cli.useCache,
-              )
-            ).boxes
-          : await detectWheels(inputBytes, CACHE_DIR, cfg.AI, cli.useCache);
-      const wheelBoxes = filterBoxesOnCar(
-        rawWheels.filter(
-          (w) =>
-            w.w * w.h <=
-              0.15 *
-                (analysis.bbox!.right - analysis.bbox!.left + 1) *
-                (analysis.bbox!.bottom - analysis.bbox!.top + 1) &&
-            w.w <= 0.35 * (analysis.bbox!.right - analysis.bbox!.left + 1),
-        ),
-        alpha, width, height, cfg.ALPHA_THRESHOLD,
-      );
-      const detected = clustersFromWheelBoxes(
-        wheelBoxes, alpha, width, height, analysis.bbox, cfg.ALPHA_THRESHOLD,
-      );
-      if (detected.length > 0) shadowClusters = detected;
-    } catch (err) {
-      noteFalFailure(err);
-      console.warn(
-        `  ⚠ ${file}: wieldetectie overgeslagen: ${err instanceof Error ? err.message : err}`,
-      );
-    }
   }
 
   let outJpeg: Buffer | null = null;
@@ -1099,6 +1118,8 @@ async function processImage(
         composited: compositeThisImage,
         contactY,
         widthRatio: Number(widthRatio.toFixed(4)),
+        wheelScale: wheelScale === null ? null : Number(wheelScale.toFixed(4)),
+        wheelsMeasured: measuredWheels.length,
         preset: cli.preset ?? null,
         harmonizeGains: harmonizeGains
           ? {

@@ -370,6 +370,31 @@ export interface Config {
    * Bindt hij, dan volgt een GROUND_TRIM_CAPPED-waarschuwing om na te kijken.
    */
   GROUND_TRIM_MAX_RATIO: number;
+  /**
+   * Nominale wieldiameter in meters, als maatlat voor de schaal.
+   *
+   * De oude schaal legde de bbox-breedte op een vaste canvasfractie. Hoeveel
+   * auto er in die bbox zit hangt echter van de kijkhoek af: gemeten over de
+   * Taycan-set liep de bbox-aspect van 1,45 tot 3,20 terwijl de widthRatio op
+   * alle dertien beelden 0,720 stond — het vooraanzicht werd dus fors groter
+   * uitgerekt dan het zijaanzicht, en in een galerij zie je dat meteen.
+   *
+   * Een wiel heeft een vaste maat, staat in vrijwel elke exterieuropname en is
+   * ongevoelig voor kijkhoek én voor een auto die deels buiten beeld valt.
+   * 0 zet de wielschaling uit en valt terug op de bbox-breedte.
+   */
+  WHEEL_DIAMETER_M: number;
+  /**
+   * Kadreringsgain op de wielschaal. 1,0 = zuiver fysiek: elke hoek krijgt de
+   * schaal die hij in werkelijkheid zou hebben, dus een 3/4-opname is smaller
+   * in beeld dan een zijaanzicht. Dat leest als één auto vanuit meerdere
+   * posities — maar het laat bij 3/4 wel veel leegte over.
+   *
+   * Hoger trekt de hele set evenredig groter; de onderlinge verhoudingen
+   * blijven kloppen. Gemeten op de Taycan-set bij 1,0: zijaanzicht 0,69 van de
+   * canvasbreedte (de config mikte oorspronkelijk op 0,72), 3/4 rond 0,46.
+   */
+  FRAMING_GAIN: number;
   ERODE_MASK: boolean; // 1px erosie tegen kleurhalo's van de originele achtergrond
   MASK_CLEAN: MaskCleanConfig; // opschoning: dunne/losstaande structuren (windmolen, paal) weg
   SHADOW: ShadowConfig;
@@ -406,6 +431,8 @@ export const defaultConfig: Config = {
   ALPHA_THRESHOLD: 10,
   GROUND_PERCENTILE: 0.95,
   GROUND_TRIM_MAX_RATIO: 0.03,
+  WHEEL_DIAMETER_M: 0.7,
+  FRAMING_GAIN: 1.0,
   ERODE_MASK: false,
   MASK_CLEAN: {
     enabled: true,

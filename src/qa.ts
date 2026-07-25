@@ -70,8 +70,16 @@ export interface ExteriorClassification {
  * afgesneden auto faalt terecht op één signaal maar hoort wél door de
  * pipeline. Vandaar een drempel op het aantal kloppende signalen.
  */
+export interface ExteriorInput {
+  analysis: AlphaAnalysis;
+  imgWidth: number;
+  imgHeight: number;
+  detectionEnabled: boolean;
+  detectionFound: boolean;
+}
+
 export function classifyExterior(
-  input: QAInput,
+  input: ExteriorInput,
   cfg: Config,
   minSignals: number,
 ): ExteriorClassification {
@@ -85,7 +93,7 @@ export function classifyExterior(
 
   const signals: ExteriorSignal[] = [
     // detectie uit → neutraal (telt als kloppend), anders moet er een auto zijn
-    { name: "auto gedetecteerd", ok: !input.detection.enabled || input.detection.found },
+    { name: "auto gedetecteerd", ok: !input.detectionEnabled || input.detectionFound },
     { name: "één samenhangend masker", ok: analysis.blobCount === 1 },
     {
       name: "maskeroppervlak plausibel",

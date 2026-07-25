@@ -534,3 +534,37 @@ export async function generateDefaultBackground(
   );
   await sharp(svg).png().toFile(path);
 }
+
+/**
+ * Schaal uit de gemeten wieldiameter.
+ *
+ * De oude schaal legde de bbox-breedte op een vaste fractie van het canvas.
+ * Maar hoeveel auto er in die bbox zit hangt van de kijkhoek af: een
+ * zijaanzicht toont ~4,4 m lengte, een vooraanzicht ~1,9 m breedte. Gemeten
+ * over de Taycan-set liep de bbox-aspect van 1,45 tot 3,20 terwijl de
+ * widthRatio op alle dertien beelden exact 0,720 stond — het vooraanzicht
+ * werd dus fors groter uitgerekt dan het zijaanzicht.
+ *
+ * Een wiel is een betere maatlat: vaste maat in meters, zichtbaar in vrijwel
+ * elke exterieuropname, en ongevoelig voor zowel de kijkhoek als voor een
+ * bronfoto waarin de auto deels buiten beeld valt.
+ *
+ * Het NABIJE wiel telt (het grootste): dat ligt het dichtst bij de
+ * contactdiepte waarop `floorScaleRef` gekalibreerd is.
+ */
+export function scaleFromWheel(
+  wheelBoxes: { x: number; y: number; w: number; h: number }[],
+  nominalWheelMeters: number,
+  floorScaleRef: number,
+): number | null {
+  let widest = 0;
+  for (const b of wheelBoxes) {
+    // diameter ~ de grootste zijde: een wiel is rond, maar de box kan bij een
+    // schuine hoek in de breedte samengedrukt zijn
+    const d = Math.max(b.w, b.h);
+    if (d > widest) widest = d;
+  }
+  if (widest < 8) return null;
+  const targetPx = nominalWheelMeters * floorScaleRef;
+  return targetPx / widest;
+}

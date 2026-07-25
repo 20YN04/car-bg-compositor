@@ -12,6 +12,7 @@ import {
   computeReflectionRect,
   generateDefaultBackground,
   mapRectToCanvas,
+  scaleFromWheel,
 } from "./composite.js";
 
 const CANVAS = { width: 1920, height: 1440 };
@@ -239,5 +240,44 @@ describe("computePlacement", () => {
     const bbox: BBox = { left: 0, top: 0, right: 499, bottom: 249 };
     const p = computePlacement(bbox, 249, CANVAS, GROUND_Y, 0.5);
     expect(p.width).toBeCloseTo(960);
+  });
+});
+
+describe("scaleFromWheel", () => {
+  const NOMINAL = 0.7;
+  const FLOOR = 314; // px per meter, showroom-plate
+
+  it("schaalt zodat het wiel op zijn werkelijke maat uitkomt", () => {
+    // wiel van 200px moet 0,7 m * 314 px/m = 220px worden
+    const s = scaleFromWheel([{ x: 0, y: 0, w: 200, h: 200 }], NOMINAL, FLOOR);
+    expect(s).toBeCloseTo(219.8 / 200, 3);
+  });
+
+  it("neemt het nabije (grootste) wiel, niet het verre", () => {
+    // bij een 3/4-hoek is het verre wiel kleiner; dat als maatlat nemen zou
+    // de auto te groot maken
+    const s = scaleFromWheel(
+      [{ x: 0, y: 0, w: 120, h: 120 }, { x: 0, y: 0, w: 200, h: 200 }],
+      NOMINAL, FLOOR,
+    );
+    expect(s).toBeCloseTo(219.8 / 200, 3);
+  });
+
+  it("gebruikt de langste zijde: een schuin wiel is in de breedte samengedrukt", () => {
+    const s = scaleFromWheel([{ x: 0, y: 0, w: 90, h: 200 }], NOMINAL, FLOOR);
+    expect(s).toBeCloseTo(219.8 / 200, 3);
+  });
+
+  it("geeft null zonder bruikbare wielen — de aanroeper valt dan terug", () => {
+    expect(scaleFromWheel([], NOMINAL, FLOOR)).toBeNull();
+    expect(scaleFromWheel([{ x: 0, y: 0, w: 4, h: 4 }], NOMINAL, FLOOR)).toBeNull();
+  });
+
+  it("maakt twee hoeken van dezelfde auto even groot", () => {
+    // zelfde auto, zijaanzicht (wiel 210px) en vooraanzicht (wiel 150px):
+    // na schaling is het wiel in beide even groot, dus ook de auto
+    const zij = scaleFromWheel([{ x: 0, y: 0, w: 210, h: 210 }], NOMINAL, FLOOR)!;
+    const voor = scaleFromWheel([{ x: 0, y: 0, w: 150, h: 150 }], NOMINAL, FLOOR)!;
+    expect(210 * zij).toBeCloseTo(150 * voor, 3);
   });
 });
