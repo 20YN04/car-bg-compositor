@@ -40,6 +40,7 @@ automatisch gegenereerde neutrale gradient in `./backgrounds/default.png`.
 ```sh
 pnpm start                          # alles in ./in/, op backgrounds/showroom.jpg
 pnpm start --target white           # cutout op puur wit, 8:5 — de canonieke referentie
+pnpm start --target studio          # geconstrueerde studio-sweep, 3:2 — zoals de live listings
 pnpm start --file foo.jpg           # één beeld
 pnpm start --bg studio-grey.jpg     # andere achtergrond (uit ./backgrounds/)
 pnpm start --matte rembg            # lokale matte (gratis, geen FAL_KEY) — default

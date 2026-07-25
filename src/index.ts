@@ -19,8 +19,9 @@ import {
 import {
   compositeImage,
   computePlacement,
-  generateDefaultBackground,
   contactYForWheels,
+  generateDefaultBackground,
+  generateStudioSweep,
   scaleFromWheel,
   type Placement,
 } from "./composite.js";
@@ -147,8 +148,8 @@ function parseCli(): { cfg: Config; cli: CliOptions } {
   // nabewerkingen in één keer, en de losse vlaggen hieronder kunnen er daarna
   // nog overheen
   if (values.target !== undefined) {
-    if (!["showroom", "white"].includes(values.target)) {
-      throw new Error("--target moet showroom of white zijn");
+    if (!["showroom", "white", "studio"].includes(values.target)) {
+      throw new Error("--target moet showroom, white of studio zijn");
     }
     cfg.TARGET = values.target as Config["TARGET"];
   }
@@ -253,9 +254,12 @@ async function resolveBackground(cli: CliOptions, cfg: Config): Promise<string> 
   // het uitvoerdoel bepaalt de achtergrond; de vlakke gradient blijft de
   // fallback wanneer die plate lokaal ontbreekt
   const wanted = path.join(BG_DIR, cfg.TARGETS[cfg.TARGET].background);
-  if (cfg.TARGET === "white" && !existsSync(wanted)) {
-    // puur wit is te genereren, een fotografische plate niet
-    await generateWhiteBackground(wanted, cfg.CANVAS);
+  if (!existsSync(wanted)) {
+    // wit en de studio-sweep zijn te genereren; een fotografische plate niet
+    if (cfg.TARGET === "white") await generateWhiteBackground(wanted, cfg.CANVAS);
+    if (cfg.TARGET === "studio") {
+      await generateStudioSweep(wanted, cfg.CANVAS, cfg.SWEEP);
+    }
   }
   if (existsSync(wanted)) return wanted;
 

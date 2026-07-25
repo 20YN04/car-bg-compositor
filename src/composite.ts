@@ -712,3 +712,59 @@ export function contactYForWheels(
   // alles zakt mee met hetzelfde verschil, dus de auto blijft intact staan
   return contactY + (minimum - highest);
 }
+
+export interface SweepParams {
+  horizonRatio: number; // y van de wand/vloerovergang als fractie van de hoogte
+  wallCentre: number; // luminantie van de wand achter de auto
+  wallEdge: number; // luminantie van de wand aan de randen
+  floorCentre: number; // luminantie van de lichtpoel op de vloer
+  floorEdge: number;
+  floorPoolRatio: number; // y van het midden van de vloerpoel
+}
+
+/**
+ * Geconstrueerde studio-sweep: elliptisch verloop op wand en vloer met een
+ * lichtpoel achter de auto.
+ *
+ * De live Carredo-listings gebruiken geen fotografische plate maar precies
+ * zo'n verloop. Gemeten op images.carredo.be (Taycan-listing, beeld 03,
+ * 1248x832): horizon op 55% van de hoogte, wand 169 in het midden tegen ~101
+ * aan de randen, vloer 200 in het midden-onder tegen 105 links.
+ *
+ * Een verloop is fundamenteel makkelijker dan een foto: geen korrel om gelijk
+ * te trekken, geen camerahoogte die bij de opname moet passen, geen
+ * perspectief om te matchen. Je rekent het uit in plaats van het te zoeken.
+ */
+export async function generateStudioSweep(
+  file: string,
+  canvas: CanvasSize,
+  p: SweepParams,
+): Promise<void> {
+  const horizon = Math.round(canvas.height * p.horizonRatio);
+  const pool = Math.round(canvas.height * p.floorPoolRatio);
+  const hex = (v: number): string => {
+    const c = Math.max(0, Math.min(255, Math.round(v)));
+    return `#${c.toString(16).padStart(2, "0").repeat(3)}`;
+  };
+  // twee elliptische verlopen, gescheiden door de horizon. De wandpoel zit óp
+  // de horizon zodat het licht achter de auto vandaan lijkt te komen.
+  const svg = Buffer.from(
+    `<svg width="${canvas.width}" height="${canvas.height}" xmlns="http://www.w3.org/2000/svg">` +
+      `<defs>` +
+      `<radialGradient id="wall" cx="50%" cy="100%" r="85%">` +
+      `<stop offset="0" stop-color="${hex(p.wallCentre)}"/>` +
+      `<stop offset="1" stop-color="${hex(p.wallEdge)}"/>` +
+      `</radialGradient>` +
+      `<radialGradient id="floor" cx="50%" cy="${((pool - horizon) / (canvas.height - horizon)) * 100}%" r="90%">` +
+      `<stop offset="0" stop-color="${hex(p.floorCentre)}"/>` +
+      `<stop offset="1" stop-color="${hex(p.floorEdge)}"/>` +
+      `</radialGradient>` +
+      `</defs>` +
+      `<rect width="${canvas.width}" height="${horizon}" fill="url(#wall)"/>` +
+      `<rect y="${horizon}" width="${canvas.width}" height="${canvas.height - horizon}" fill="url(#floor)"/>` +
+      `</svg>`,
+  );
+  // lichte blur over de naad: in de referentie is de wand/vloerovergang
+  // zichtbaar maar niet hard
+  await sharp(svg).blur(1.5).png().toFile(file);
+}

@@ -465,7 +465,9 @@ export interface BrandingConfig {
   margin: number; // afstand tot de rechterbenedenhoek
 }
 
-export type OutputTarget = "showroom" | "white";
+import type { SweepParams } from "./composite.js";
+
+export type OutputTarget = "showroom" | "white" | "studio";
 
 /**
  * Uitvoerdoel. Dit is geen cosmetische keuze maar bepaalt hoe moeilijk het
@@ -505,6 +507,7 @@ export interface TargetPreset {
 
 export interface Config {
   TARGET: OutputTarget;
+  SWEEP: SweepParams;
   TARGETS: Record<OutputTarget, TargetPreset>;
   CANVAS: CanvasSize;
   GROUND_Y: number; // y-coördinaat waar de banden komen te staan
@@ -583,6 +586,15 @@ export interface Config {
 
 export const defaultConfig: Config = {
   TARGET: "showroom",
+  // gemeten op images.carredo.be, Taycan-listing beeld 03 (1248x832)
+  SWEEP: {
+    horizonRatio: 0.55,
+    wallCentre: 172,
+    wallEdge: 98,
+    floorCentre: 205,
+    floorEdge: 100,
+    floorPoolRatio: 0.88,
+  },
   TARGETS: {
     showroom: {
       canvas: { width: 1920, height: 1440 }, // 4:3, AutoScout24 adviseert 1280x960
@@ -591,6 +603,20 @@ export const defaultConfig: Config = {
       lightWrap: true,
       scaleMode: "wheel",
       frameWidthRatio: 0.76,
+    },
+    /**
+     * Geconstrueerde studio-sweep, geijkt op de live Carredo-listings
+     * (images.carredo.be, 1248x832). Geen fotografische plate maar een
+     * elliptisch verloop met een lichtpoel achter de auto en een gepolijste
+     * vloer met sterke spiegeling.
+     */
+    studio: {
+      canvas: { width: 1248, height: 832 }, // 3:2, zoals de live galerij
+      background: "studio-sweep.png",
+      grain: false, // een verloop heeft geen korrel om mee te matchen
+      lightWrap: true,
+      scaleMode: "frame",
+      frameWidthRatio: 0.72,
     },
     white: {
       // 8:5, zoals de referenties in carredo-imaging-refs (1200x750)
@@ -767,6 +793,26 @@ export const defaultConfig: Config = {
      * floorScaleRef 390 zet een zijaanzicht op ~85% canvasbreedte, zoals de
      * referenties. Geen vloerreflectie, geen gloed, geen vignette: wit is wit.
      */
+    /**
+     * Sweep-profiel. Sterke vloerreflectie: de live beelden hebben een
+     * gepolijste vloer waarin de auto duidelijk spiegelt, veel meer dan de
+     * 0,12 van de betonplate.
+     */
+    "studio-sweep.png": {
+      horizonY: 458, // 55% van 832, gemeten op de live listing
+      contactTargetY: 640,
+      floorScaleRef: 300,
+      carWidthMeters: 4.4,
+      lightDirX: 0,
+      lightSoftness: 0.9,
+      floorReflectivity: 0.34,
+      reflectionHeightRatio: 0.45,
+      glowStrength: 0, // de sweep heeft zijn lichtpoel al ingebakken
+      vignetteStrength: 0,
+      toneBrightness: 1,
+      toneWarmth: 0,
+      horizontalBias: 0.5,
+    },
     "white.png": {
       horizonY: null,
       // gemeten op de referenties: onderkant van de auto op 76% van de
