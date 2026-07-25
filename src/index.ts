@@ -263,11 +263,21 @@ async function resolveBackground(cli: CliOptions, cfg: Config): Promise<string> 
   // het uitvoerdoel bepaalt de achtergrond; de vlakke gradient blijft de
   // fallback wanneer die plate lokaal ontbreekt
   const wanted = path.join(BG_DIR, cfg.TARGETS[cfg.TARGET].background);
-  if (!existsSync(wanted)) {
-    // wit en de studio-sweep zijn te genereren; een fotografische plate niet
-    if (cfg.TARGET === "white") await generateWhiteBackground(wanted, cfg.CANVAS);
-    if (cfg.TARGET === "studio") {
-      await generateStudioSweep(wanted, cfg.CANVAS, cfg.SWEEP);
+  // wit en de studio-sweep zijn te genereren; een fotografische plate niet.
+  // Een gegenereerde achtergrond wordt ook opnieuw gemaakt zodra de parameters
+  // veranderen — met alleen een bestaat-check kalibreer je anders op een
+  // achtergrond die niet meer bij de config hoort, en dat merk je pas als de
+  // metingen onverklaarbaar niet bewegen.
+  if (cfg.TARGET === "white" || cfg.TARGET === "studio") {
+    const recipe = JSON.stringify(
+      cfg.TARGET === "studio" ? { c: cfg.CANVAS, s: cfg.SWEEP } : { c: cfg.CANVAS },
+    );
+    const stamp = `${wanted}.recipe.json`;
+    const current = existsSync(stamp) ? await readFile(stamp, "utf8") : null;
+    if (!existsSync(wanted) || current !== recipe) {
+      if (cfg.TARGET === "white") await generateWhiteBackground(wanted, cfg.CANVAS);
+      else await generateStudioSweep(wanted, cfg.CANVAS, cfg.SWEEP);
+      await writeFile(stamp, recipe);
     }
   }
   if (existsSync(wanted)) return wanted;

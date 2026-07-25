@@ -14,6 +14,7 @@ import {
   generateDefaultBackground,
   mapRectToCanvas,
   scaleFromWheel,
+  sweepLuminance,
 } from "./composite.js";
 
 const CANVAS = { width: 1920, height: 1440 };
@@ -342,5 +343,58 @@ describe("horizontalBias", () => {
     expect(b.scale).toBeCloseTo(a.scale);
     expect(b.width).toBeCloseTo(a.width);
     expect(b.y).toBeCloseTo(a.y);
+  });
+});
+
+/**
+ * De studio-sweep is gekalibreerd op de live Carredo-listings (Taycan,
+ * 1248x832, alle zes de studiobeelden). Deze test legt die kalibratie vast:
+ * gaat er iemand aan een parameter draaien, dan laat dit zien wat er stukgaat
+ * en niet alleen dát er iets stukging.
+ *
+ * Alleen punten op de kále achtergrond. Meetpunten binnen de spiegelzone van
+ * hun auto (rond y=620 in het middenveld) staan er bewust NIET in: die zijn
+ * door de auto verdonkerd en zeggen niets over de achtergrond.
+ */
+describe("sweepLuminance tegen de gemeten referentie", () => {
+  const CANVAS = { width: 1248, height: 832 };
+  const P = defaultConfig.SWEEP;
+  const REF: [string, number, number, number][] = [
+    ["wand midden boven", 624, 20, 145],
+    ["wand midden", 624, 100, 189],
+    ["wand midden laag", 624, 220, 226],
+    ["wand rand boven", 40, 20, 97],
+    ["wand rand", 40, 100, 109],
+    ["wand rand laag", 40, 220, 149],
+    ["wand rand horizon", 40, 300, 158],
+    ["vloer links", 30, 620, 128],
+    ["vloer links lager", 30, 740, 107],
+    ["vloer onderhoek", 30, 820, 93],
+    ["vloer rechts", 1215, 680, 119],
+    ["lichtpoel onder de auto", 624, 790, 203],
+    ["vouwlijn op de naad", 40, 458, 114],
+  ];
+
+  for (const [naam, x, y, want] of REF) {
+    it(`${naam} (${x},${y}) ligt op ${want}`, () => {
+      expect(sweepLuminance(x, y, CANVAS, P)).toBeCloseTo(want, -1.1);
+    });
+  }
+
+  it("heeft geen stap op de naad aan de zijkanten", () => {
+    // Alleen aan de zijkanten, want alleen daar is de naad in hun beelden
+    // onbedekt en dus meetbaar: 148 boven de naad tegen 141 eronder.
+    //
+    // In het midden staat er bij hen wél een stap (wand ~228 tegen vloer
+    // ~165), maar die zit in elk van hun zes beelden achter de auto. Hier een
+    // aansluiting eisen zou een eis zijn die de referentie zelf niet haalt.
+    //
+    // De zijkanten waren precies waar het zichtbare defect zat: de radiale
+    // vloergradient maakte de vloer daar 82 onder een wand van 163.
+    for (const x of [40, 1210]) {
+      const boven = sweepLuminance(x, 440, CANVAS, P);
+      const onder = sweepLuminance(x, 480, CANVAS, P);
+      expect(Math.abs(boven - onder)).toBeLessThan(20);
+    }
   });
 });

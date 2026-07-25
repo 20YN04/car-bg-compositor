@@ -716,28 +716,132 @@ export function contactYForWheels(
 
 export interface SweepParams {
   horizonRatio: number; // y van de wand/vloerovergang als fractie van de hoogte
-  wallCentre: number; // luminantie van de wand achter de auto
-  wallEdge: number; // luminantie van de wand aan de randen
-  floorCentre: number; // luminantie van de lichtpoel op de vloer
-  floorEdge: number;
-  floorPoolRatio: number; // y van het midden van de vloerpoel
-  /** Hoeveel donkerder de wand bovenaan is dan bij de horizon. Gemeten: ~12. */
-  wallVerticalFalloff: number;
   /**
-   * Straal van de vloerpoel. Smaller dan de wand: op de vloer valt het licht
-   * wél af naar de zijkanten (106 aan de rand tegen 204 in het midden).
+   * Verticaal profiel van de wand in het midden: luminantie op hoogtes
+   * uitgedrukt als fractie van de wandband (0 = bovenrand, 1 = horizon).
+   *
+   * Een verzadigende curve, geen rechte lijn: gemeten stijgt de wand snel en
+   * vlakt dan af. Een lineair verloop dat door de twee gemeten uiteinden gaat
+   * zou bij de horizon op ~304 uitkomen — een wit gat achter de auto.
    */
-  floorRadius: number;
+  wallStops: { at: number; lum: number }[];
+  /**
+   * Vignettering aan de zijkanten als fractie zwart (0..1) op de uiterste rand,
+   * per hoogte — niet als vaste kleur en niet als één getal.
+   *
+   * Vermenigvuldigen in plaats van naar een kleur trekken houdt het verband
+   * intact: de gemeten randen lopen mee omhoog met het midden (102 bovenaan
+   * naar 160 lager), en dat doet een vaste kleur niet.
+   *
+   * Per hoogte, want de gemeten vignettering is een boog: 0,33 bovenaan, het
+   * diepst met 0,42 rond y=100, en weer 0,31 bij de horizon. Eén vast getal
+   * zat er in de middenband 17 tot 26 niveaus naast.
+   */
+  wallVignetteStops: { at: number; v: number }[];
+  /** Luminantie van de vloer direct onder de naad. Gemeten ~138. */
+  floorSeam: number;
+  /** Luminantie van de vloer onderaan het beeld, in het midden. Gemeten ~128. */
+  floorBottom: number;
+  /**
+   * Hoeveel donkerder de onderhoeken zijn. Deze vignettering groeit naar
+   * beneden toe: vlak onder de naad is de rand juist niet donkerder dan het
+   * midden (128 tegen 118), onderaan wel (93 tegen 128).
+   */
+  floorCornerVignette: number;
+  /** Hoeveel de lichtpoel onder de auto bovenop de basis legt. Gemeten ~75. */
+  poolGain: number;
+  poolCentreRatio: number; // y van de poelkern als fractie van de vloerband
+  poolWidthRatio: number; // horizontale spreiding als fractie van de breedte
+  poolHeightRatio: number; // verticale spreiding als fractie van de vloerband
+  /**
+   * De vouwlijn waar wand en vloer samenkomen. Een cyclorama heeft daar een
+   * zachte schaduw: gemeten zakt de naad naar 114 terwijl er 148 boven en 130
+   * onder staat. Zonder die lijn oogt de overgang als twee aan elkaar geplakte
+   * vlakken in plaats van als een doorlopend oppervlak.
+   */
+  creaseDepth: number;
+  creaseSigma: number; // in px
 }
 
 /**
- * Geconstrueerde studio-sweep: elliptisch verloop op wand en vloer met een
- * lichtpoel achter de auto.
+ * Luminantie van de studio-sweep op één pixel.
+ *
+ * Losgetrokken van het schrijven naar bestand zodat het profiel te meten is
+ * zonder een PNG te hoeven decoderen — de tests toetsen hierop tegen de
+ * gemeten waarden van de referentie.
+ */
+export function sweepLuminance(
+  x: number,
+  y: number,
+  canvas: CanvasSize,
+  p: SweepParams,
+): number {
+  const horizon = canvas.height * p.horizonRatio;
+  // 0 in het midden, 1 aan de zijrand; de middelste ~16% blijft onaangeroerd
+  const u = Math.abs(x / canvas.width - 0.5);
+  const side = Math.max(0, Math.min(1, (u - 0.08) / 0.42));
+
+  let value: number;
+  if (y < horizon) {
+    const t = y / horizon;
+    // piecewise lineair door de gemeten stops
+    let lum = p.wallStops[0]?.lum ?? 0;
+    for (let i = 1; i < p.wallStops.length; i++) {
+      const a = p.wallStops[i - 1];
+      const b = p.wallStops[i];
+      if (!a || !b) continue;
+      if (t <= b.at) {
+        const span = Math.max(1e-6, b.at - a.at);
+        lum = a.lum + (b.lum - a.lum) * Math.min(1, (t - a.at) / span);
+        break;
+      }
+      lum = b.lum;
+    }
+    let vig = p.wallVignetteStops[0]?.v ?? 0;
+    for (let i = 1; i < p.wallVignetteStops.length; i++) {
+      const a = p.wallVignetteStops[i - 1];
+      const b = p.wallVignetteStops[i];
+      if (!a || !b) continue;
+      if (t <= b.at) {
+        const span = Math.max(1e-6, b.at - a.at);
+        vig = a.v + (b.v - a.v) * Math.min(1, (t - a.at) / span);
+        break;
+      }
+      vig = b.v;
+    }
+    // vermenigvuldigen, niet naar een vaste kleur trekken: zo lopen de randen
+    // mee omhoog met het midden, zoals gemeten
+    value = lum * (1 - vig * side);
+  } else {
+    const band = Math.max(1, canvas.height - horizon);
+    const s = (y - horizon) / band;
+    const base = p.floorSeam + (p.floorBottom - p.floorSeam) * s;
+    // de hoekvignettering groeit naar beneden: vlak onder de naad is de rand
+    // niet donkerder dan het midden, onderaan wel
+    value = base * (1 - p.floorCornerVignette * side * s);
+    // lichtpoel onder de auto, gaussisch zodat hij nergens een rand heeft
+    const dx = (x - canvas.width / 2) / (p.poolWidthRatio * canvas.width);
+    const dy = (y - (horizon + p.poolCentreRatio * band)) / (p.poolHeightRatio * band);
+    value += p.poolGain * Math.exp(-(dx * dx + dy * dy));
+  }
+
+  // de vouwlijn ligt over beide vlakken heen, anders zit hij alleen aan één kant
+  const d = (y - horizon) / p.creaseSigma;
+  return value * (1 - p.creaseDepth * Math.exp(-d * d));
+}
+
+/**
+ * Geconstrueerde studio-sweep: verticaal verlopende wand met vignettering,
+ * een vloer met lichtpoel, en een vouwlijn op de naad.
  *
  * De live Carredo-listings gebruiken geen fotografische plate maar precies
- * zo'n verloop. Gemeten op images.carredo.be (Taycan-listing, beeld 03,
- * 1248x832): horizon op 55% van de hoogte, wand 169 in het midden tegen ~101
- * aan de randen, vloer 200 in het midden-onder tegen 105 links.
+ * zo'n verloop. Gemeten op images.carredo.be (Taycan-listing, 1248x832) over
+ * alle zes de studiobeelden, dus dit is hun studio en niet één opname.
+ *
+ * Uitgerekend in plaats van getekend: met gestapelde SVG-gradiënten kreeg ik
+ * de vloer niet gemodelleerd. Die is bij de naad licht (~138) en donkert af
+ * naar de onderhoeken (~95) met een poel onder de auto — een radiale gradient
+ * doet precies het omgekeerde en gaf een zichtbare stap op de naad.
  *
  * Een verloop is fundamenteel makkelijker dan een foto: geen korrel om gelijk
  * te trekken, geen camerahoogte die bij de opname moet passen, geen
@@ -748,41 +852,16 @@ export async function generateStudioSweep(
   canvas: CanvasSize,
   p: SweepParams,
 ): Promise<void> {
-  const horizon = Math.round(canvas.height * p.horizonRatio);
-  const pool = Math.round(canvas.height * p.floorPoolRatio);
-  const hex = (v: number): string => {
-    const c = Math.max(0, Math.min(255, Math.round(v)));
-    return `#${c.toString(16).padStart(2, "0").repeat(3)}`;
-  };
-  // De wand is GEEN radiale poel. Gemeten op de live listing valt hij
-  // verticaal nauwelijks af (176 bij de horizon naar 164 bovenaan) maar
-  // horizontaal sterk (164 in het midden naar 102 in de hoek). Een radiale
-  // poel gaf boven-midden 97 — even donker als de hoek. Dus: een milde
-  // verticale gradient met daaroverheen een horizontale vignettering.
-  const svg = Buffer.from(
-    `<svg width="${canvas.width}" height="${canvas.height}" xmlns="http://www.w3.org/2000/svg">` +
-      `<defs>` +
-      `<linearGradient id="wallV" x1="0" y1="0" x2="0" y2="1">` +
-      `<stop offset="0" stop-color="${hex(p.wallCentre - p.wallVerticalFalloff)}"/>` +
-      `<stop offset="1" stop-color="${hex(p.wallCentre)}"/>` +
-      `</linearGradient>` +
-      `<linearGradient id="vign" x1="0" y1="0" x2="1" y2="0">` +
-      `<stop offset="0" stop-color="${hex(p.wallEdge)}" stop-opacity="1"/>` +
-      `<stop offset="0.42" stop-color="${hex(p.wallEdge)}" stop-opacity="0"/>` +
-      `<stop offset="0.58" stop-color="${hex(p.wallEdge)}" stop-opacity="0"/>` +
-      `<stop offset="1" stop-color="${hex(p.wallEdge)}" stop-opacity="1"/>` +
-      `</linearGradient>` +
-      `<radialGradient id="floor" cx="50%" cy="${((pool - horizon) / (canvas.height - horizon)) * 100}%" r="${p.floorRadius * 100}%">` +
-      `<stop offset="0" stop-color="${hex(p.floorCentre)}"/>` +
-      `<stop offset="1" stop-color="${hex(p.floorEdge)}"/>` +
-      `</radialGradient>` +
-      `</defs>` +
-      `<rect width="${canvas.width}" height="${horizon}" fill="url(#wallV)"/>` +
-      `<rect width="${canvas.width}" height="${horizon}" fill="url(#vign)"/>` +
-      `<rect y="${horizon}" width="${canvas.width}" height="${canvas.height - horizon}" fill="url(#floor)"/>` +
-      `</svg>`,
-  );
-  // lichte blur over de naad: in de referentie is de wand/vloerovergang
-  // zichtbaar maar niet hard
-  await sharp(svg).blur(1.5).png().toFile(file);
+  const { width, height } = canvas;
+  const raw = Buffer.alloc(width * height);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const v = sweepLuminance(x + 0.5, y + 0.5, canvas, p);
+      raw[y * width + x] = Math.max(0, Math.min(255, Math.round(v)));
+    }
+  }
+  await sharp(raw, { raw: { width, height, channels: 1 } })
+    .toColourspace("b-w")
+    .png()
+    .toFile(file);
 }

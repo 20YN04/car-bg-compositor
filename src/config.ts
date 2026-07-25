@@ -627,16 +627,45 @@ export interface Config {
 
 export const defaultConfig: Config = {
   TARGET: "showroom",
-  // gemeten op images.carredo.be, Taycan-listing beeld 03 (1248x832)
+  // Gemeten op images.carredo.be, Taycan-listing, alle zes de studiobeelden
+  // (1248x832). Het wandprofiel is over die zes stabiel — midden 146 bovenaan
+  // naar 222 op y=220, rand 102 naar 160 — dus het is een eigenschap van hun
+  // studio en niet van één opname.
   SWEEP: {
     horizonRatio: 0.55,
-    wallCentre: 176,
-    wallEdge: 88,
-    floorCentre: 236,
-    floorEdge: 84,
-    floorPoolRatio: 0.9,
-    wallVerticalFalloff: 14,
-    floorRadius: 0.72,
+    // offsets zijn fracties van de wandband (horizon op y=458 bij 832 hoog):
+    // y=20 -> 0,044, y=80 -> 0,175, y=140 -> 0,306, y=220 -> 0,48. De waarde
+    // op 0 is doorgetrokken vanaf de eerste twee metingen.
+    wallStops: [
+      { at: 0, lum: 133 },
+      { at: 0.175, lum: 180 },
+      { at: 0.306, lum: 208 },
+      { at: 0.48, lum: 226 },
+      { at: 1, lum: 228 },
+    ],
+    // gemeten vignettering aan de rand (x=40, dus side 0,92) was 0,33 / 0,42 /
+    // 0,34 / 0,31 op t = 0,04 / 0,22 / 0,48 / 0,65; hier gedeeld door 0,92
+    // zodat de stops voor de uiterste rand gelden
+    wallVignetteStops: [
+      { at: 0, v: 0.358 },
+      { at: 0.22, v: 0.455 },
+      { at: 0.48, v: 0.369 },
+      { at: 1, v: 0.332 },
+    ],
+    // vloer, gemeten weg van de auto: 138 net onder de naad, aflopend naar
+    // ~118 in het midden onderaan en ~93 in de onderhoeken
+    floorSeam: 160,
+    floorBottom: 110,
+    floorCornerVignette: 0.18,
+    // de lichtpoel onder de auto piekt op 203 tegen een basis van ~130; de
+    // halfwaardebreedte ligt op ~174 px, dus een smalle poel
+    poolGain: 88,
+    poolCentreRatio: 0.9,
+    poolWidthRatio: 0.17,
+    poolHeightRatio: 0.55,
+    // de naad zakt naar 114 met 148 erboven en 130 eronder
+    creaseDepth: 0.3,
+    creaseSigma: 4,
   },
   TARGETS: {
     showroom: {
