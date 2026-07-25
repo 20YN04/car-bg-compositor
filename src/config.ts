@@ -448,6 +448,12 @@ export interface BackgroundProfile {
   vignetteStrength: number; // donkere hoeken
   toneBrightness: number; // 1 = ongewijzigd; <1 iets donkerder
   toneWarmth: number; // 0 = neutraal; >0 warmer (r omhoog, b omlaag)
+  /**
+   * Horizontale positie van het middelpunt van de auto, als fractie van de
+   * canvasbreedte. 0,5 = gecentreerd. De cutout-referenties zetten dit op
+   * ~0,45: links van het midden, met ruimte rechts voor plaat en badge.
+   */
+  horizontalBias: number;
 }
 
 export interface BrandingConfig {
@@ -459,7 +465,47 @@ export interface BrandingConfig {
   margin: number; // afstand tot de rechterbenedenhoek
 }
 
+export type OutputTarget = "showroom" | "white";
+
+/**
+ * Uitvoerdoel. Dit is geen cosmetische keuze maar bepaalt hoe moeilijk het
+ * probleem is.
+ *
+ * showroom — de auto op een fotografische studioplate. Dan moet je het
+ *   vloerperspectief, de horizon, de korrel en de lichtrichting van die plate
+ *   matchen, en botst wat er in de lak spiegelt met waar de auto staat.
+ *
+ * white — de auto op puur wit met een strakke contactschaduw. Dat is de
+ *   canonieke referentie in carredo-imaging-refs, en het is de vorm die de
+ *   markt gebruikt. Er is geen vloer om te matchen, geen korrel om gelijk te
+ *   trekken en geen omgeving waarmee de reflecties kunnen botsen — het
+ *   conflict verdwijnt omdat er geen tweede verhaal is.
+ *
+ * GRAIN en LIGHTWRAP staan op wit uit: allebei bestaan ze om tegen een
+ * fotografische plate te matchen. Ruis toevoegen aan een vlak wit veld maakt
+ * het vuil, en er is geen omgevingslicht om langs de rand te laten bloeden.
+ */
+export interface TargetPreset {
+  canvas: CanvasSize;
+  background: string;
+  grain: boolean;
+  lightWrap: boolean;
+  /**
+   * wheel — schaal op de gemeten wieldiameter, dus fysiek consistent: een 3/4
+   *   toont een smaller silhouet dan een zijaanzicht, precies zoals in het
+   *   echt. Juist voor een scene waarin de auto ergens staat.
+   * frame — schaal op de bboxbreedte naar een vaste fractie van het canvas,
+   *   dus consistente kadervulling ongeacht de hoek. Gemeten op de
+   *   referenties in carredo-imaging-refs: 73% en 78% breed, allebei
+   *   3/4-opnames. Voor een cutout-catalogus is dat de norm.
+   */
+  scaleMode: "wheel" | "frame";
+  frameWidthRatio: number; // alleen bij scaleMode "frame"
+}
+
 export interface Config {
+  TARGET: OutputTarget;
+  TARGETS: Record<OutputTarget, TargetPreset>;
   CANVAS: CanvasSize;
   GROUND_Y: number; // y-coördinaat waar de banden komen te staan
   CAR_WIDTH_RATIO: number; // fractie canvasbreedte
@@ -536,6 +582,26 @@ export interface Config {
 }
 
 export const defaultConfig: Config = {
+  TARGET: "showroom",
+  TARGETS: {
+    showroom: {
+      canvas: { width: 1920, height: 1440 }, // 4:3, AutoScout24 adviseert 1280x960
+      background: "showroom.jpg",
+      grain: true,
+      lightWrap: true,
+      scaleMode: "wheel",
+      frameWidthRatio: 0.76,
+    },
+    white: {
+      // 8:5, zoals de referenties in carredo-imaging-refs (1200x750)
+      canvas: { width: 1920, height: 1200 },
+      background: "white.png",
+      grain: false,
+      lightWrap: false,
+      scaleMode: "frame",
+      frameWidthRatio: 0.76, // referenties meten 73% en 78%
+    },
+  },
   CANVAS: { width: 1920, height: 1440 },
   GROUND_Y: 1200,
   CAR_WIDTH_RATIO: 0.82,
@@ -665,6 +731,7 @@ export const defaultConfig: Config = {
       vignetteStrength: 0.3,
       toneBrightness: 0.94,
       toneWarmth: 0,
+      horizontalBias: 0.5,
     },
     // gekalibreerd op de betonvloer-showroomplate (1536×1024 → cover 1920×1440).
     // horizonY opgemeten op de plate zelf: sterkste horizontale luminantierand
@@ -686,7 +753,38 @@ export const defaultConfig: Config = {
       vignetteStrength: 0.18,
       toneBrightness: 0.96, // referentie is een tikje donkerder
       toneWarmth: 0.025, // en een tikje warmer grijs
-
+      horizontalBias: 0.5,
+    },
+    /**
+     * Cutout op puur wit — de canonieke referentie uit carredo-imaging-refs.
+     *
+     * Dit is een fundamenteel makkelijker doel dan een fotografische
+     * studioplate: er is geen vloerperspectief om te matchen, geen horizon,
+     * geen korrel en geen omgeving waarmee de reflecties in de lak kunnen
+     * botsen. Het conflict tussen "wat de lak spiegelt" en "waar de auto
+     * staat" verdwijnt omdat er geen tweede verhaal is.
+     *
+     * floorScaleRef 390 zet een zijaanzicht op ~85% canvasbreedte, zoals de
+     * referenties. Geen vloerreflectie, geen gloed, geen vignette: wit is wit.
+     */
+    "white.png": {
+      horizonY: null,
+      // gemeten op de referenties: onderkant van de auto op 76% van de
+      // beeldhoogte. Onze eerste poging zette hem op 83-84%.
+      contactTargetY: 870,
+      floorScaleRef: 390,
+      carWidthMeters: 4.4,
+      lightDirX: 0,
+      lightSoftness: 0.55, // kleine, strakke contactschaduw
+      floorReflectivity: 0,
+      reflectionHeightRatio: 0,
+      glowStrength: 0,
+      vignetteStrength: 0,
+      toneBrightness: 1,
+      toneWarmth: 0,
+      // PROMPT.md schrijft 45% voor, maar de referentiebeelden zelf meten
+      // allebei 50%. De beelden zijn de benchmark, niet het document.
+      horizontalBias: 0.5,
     },
   },
   // neutrale gradient: geen perspectief, dus de klassieke plaatsing
@@ -705,6 +803,7 @@ export const defaultConfig: Config = {
     vignetteStrength: 0.12,
     toneBrightness: 1,
     toneWarmth: 0,
+    horizontalBias: 0.5,
   },
   ROUTING: {
     enabled: true,

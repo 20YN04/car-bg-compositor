@@ -23,13 +23,17 @@ export function computePlacement(
   canvas: CanvasSize,
   groundY: number,
   carWidthRatio: number,
+  horizontalBias = 0.5,
 ): Placement {
   const bboxWidth = bbox.right - bbox.left + 1;
   const bboxHeight = bbox.bottom - bbox.top + 1;
   const scale = (canvas.width * carWidthRatio) / bboxWidth;
   const width = bboxWidth * scale;
   const height = bboxHeight * scale;
-  const x = (canvas.width - width) / 2;
+  // bias 0,5 = gecentreerd. De cutout-referenties zetten het middelpunt op
+  // ~45%, links van het midden, zodat er rechts ruimte overblijft voor de
+  // plaat en de badge.
+  const x = canvas.width * horizontalBias - width / 2;
   // +1: groundLine is een inclusieve pixelrij; de onderrand ervan moet op
   // GROUND_Y landen (anders staat elke auto één geschaalde pixel te laag)
   const y = groundY - (groundLine - bbox.top + 1) * scale;

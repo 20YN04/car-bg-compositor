@@ -138,10 +138,24 @@ function parseCli(): { cfg: Config; cli: CliOptions } {
       "rembg-model": { type: "string" },
       plate: { type: "string" },
       preset: { type: "string" },
+      target: { type: "string" },
     },
   });
 
   const cfg: Config = structuredClone(defaultConfig);
+  // het uitvoerdoel eerst: dat zet canvas, achtergrond en de plate-specifieke
+  // nabewerkingen in één keer, en de losse vlaggen hieronder kunnen er daarna
+  // nog overheen
+  if (values.target !== undefined) {
+    if (!["showroom", "white"].includes(values.target)) {
+      throw new Error("--target moet showroom of white zijn");
+    }
+    cfg.TARGET = values.target as Config["TARGET"];
+  }
+  const targetPreset = cfg.TARGETS[cfg.TARGET];
+  cfg.CANVAS = { ...targetPreset.canvas };
+  cfg.GRAIN.enabled = targetPreset.grain;
+  cfg.LIGHTWRAP.enabled = targetPreset.lightWrap;
   if (values["ground-y"] !== undefined) {
     cfg.GROUND_Y = Number(values["ground-y"]);
     if (!Number.isFinite(cfg.GROUND_Y)) throw new Error("--ground-y moet een getal zijn");
@@ -236,10 +250,14 @@ async function resolveBackground(cli: CliOptions, cfg: Config): Promise<string> 
     }
     return resolved;
   }
-  // de gekalibreerde studioplate is de productie-achtergrond; de vlakke
-  // gradient blijft de fallback wanneer die plate lokaal ontbreekt
-  const showroom = path.join(BG_DIR, "showroom.jpg");
-  if (existsSync(showroom)) return showroom;
+  // het uitvoerdoel bepaalt de achtergrond; de vlakke gradient blijft de
+  // fallback wanneer die plate lokaal ontbreekt
+  const wanted = path.join(BG_DIR, cfg.TARGETS[cfg.TARGET].background);
+  if (cfg.TARGET === "white" && !existsSync(wanted)) {
+    // puur wit is te genereren, een fotografische plate niet
+    await generateWhiteBackground(wanted, cfg.CANVAS);
+  }
+  if (existsSync(wanted)) return wanted;
 
   const defaultBg = path.join(BG_DIR, "default.png");
   if (!existsSync(defaultBg)) {
@@ -270,6 +288,20 @@ async function withProvenance(
     .withXmp(provenanceXmp(record))
     .jpeg({ quality: cfg.JPEG_QUALITY })
     .toBuffer();
+}
+
+/** Puur wit vlak: de canonieke cutout-achtergrond. */
+async function generateWhiteBackground(file: string, canvas: Config["CANVAS"]): Promise<void> {
+  await sharp({
+    create: {
+      width: canvas.width,
+      height: canvas.height,
+      channels: 3,
+      background: { r: 255, g: 255, b: 255 },
+    },
+  })
+    .png()
+    .toFile(file);
 }
 
 const warnedProfiles = new Set<string>();
@@ -573,11 +605,17 @@ async function processImage(
   const bboxWidthPx = analysis.bbox
     ? analysis.bbox.right - analysis.bbox.left + 1
     : cfg.CANVAS.width;
+  // Het uitvoerdoel bepaalt waarop geschaald wordt. In een scene wil je
+  // fysieke consistentie (wielmaat); in een cutout-catalogus wil je
+  // consistente kadervulling, want daar staat de auto nergens.
+  const target = cfg.TARGETS[cfg.TARGET];
   const widthRatio =
     cli.carWidthOverride ??
-    (wheelScale !== null
-      ? (wheelScale * bboxWidthPx) / cfg.CANVAS.width
-      : (spanMeters * profile.floorScaleRef) / cfg.CANVAS.width);
+    (target.scaleMode === "frame"
+      ? target.frameWidthRatio
+      : wheelScale !== null
+        ? (wheelScale * bboxWidthPx) / cfg.CANVAS.width
+        : (spanMeters * profile.floorScaleRef) / cfg.CANVAS.width);
 
   // aangesmolten slagschaduw onder de wiellijn uit het masker snijden, zodat
   // die niet als grijze appendage onder de auto in het eindbeeld belandt
@@ -609,6 +647,7 @@ async function processImage(
       cfg.CANVAS,
       contactY,
       widthRatio,
+      profile.horizontalBias,
     );
     // bij een sterke 3/4-hoek staat het verre wiel fors hoger in beeld en zou
     // het boven de wand/vloerovergang van de plate landen: één wiel op de
@@ -627,6 +666,7 @@ async function processImage(
       if (contactYUsed !== contactY) {
         placement = computePlacement(
           analysis.bbox, analysis.groundLine, cfg.CANVAS, contactYUsed, widthRatio,
+          profile.horizontalBias,
         );
       }
     }

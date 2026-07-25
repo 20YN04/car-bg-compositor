@@ -317,3 +317,30 @@ describe("contactYForWheels", () => {
     expect(contactYForWheels([], bbox, CONTACT, 1, 700, HORIZON, 20)).toBe(CONTACT);
   });
 });
+
+describe("horizontalBias", () => {
+  const bbox: BBox = { left: 0, top: 0, right: 999, bottom: 399 };
+
+  it("centreert bij 0,5 — het oude gedrag blijft de default", () => {
+    const zonder = computePlacement(bbox, 399, CANVAS, GROUND_Y, RATIO);
+    const met = computePlacement(bbox, 399, CANVAS, GROUND_Y, RATIO, 0.5);
+    expect(met.x).toBeCloseTo(zonder.x);
+    expect(met.x + met.width / 2).toBeCloseTo(CANVAS.width / 2);
+  });
+
+  it("zet het middelpunt op de opgegeven fractie", () => {
+    // de cutout-referenties zetten het middelpunt op ~45%, links van het
+    // midden, met ruimte rechts voor plaat en badge
+    const p = computePlacement(bbox, 399, CANVAS, GROUND_Y, RATIO, 0.45);
+    expect(p.x + p.width / 2).toBeCloseTo(CANVAS.width * 0.45);
+    expect(p.x).toBeLessThan(computePlacement(bbox, 399, CANVAS, GROUND_Y, RATIO).x);
+  });
+
+  it("laat de schaal ongemoeid: alleen de positie verschuift", () => {
+    const a = computePlacement(bbox, 399, CANVAS, GROUND_Y, RATIO, 0.5);
+    const b = computePlacement(bbox, 399, CANVAS, GROUND_Y, RATIO, 0.35);
+    expect(b.scale).toBeCloseTo(a.scale);
+    expect(b.width).toBeCloseTo(a.width);
+    expect(b.y).toBeCloseTo(a.y);
+  });
+});

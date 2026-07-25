@@ -39,6 +39,7 @@ automatisch gegenereerde neutrale gradient in `./backgrounds/default.png`.
 
 ```sh
 pnpm start                          # alles in ./in/, op backgrounds/showroom.jpg
+pnpm start --target white           # cutout op puur wit, 8:5 — de canonieke referentie
 pnpm start --file foo.jpg           # één beeld
 pnpm start --bg studio-grey.jpg     # andere achtergrond (uit ./backgrounds/)
 pnpm start --matte rembg            # lokale matte (gratis, geen FAL_KEY) — default
@@ -128,6 +129,34 @@ ruit- en wielstappen om; de plaat- en matte-stappen blijven bewust op het
 beproefde pad. Controleer één beeld voordat je een batch draait — let vooral op
 de box-conventie: de docs zeggen genormaliseerd `[cx, cy, w, h]`, `toAbsoluteBox`
 heeft daar een guard voor maar dat is nog niet tegen een echte respons getest.
+
+## Twee uitvoerdoelen — en waarom dat de moeilijkheid bepaalt
+
+`--target showroom` (default) zet de auto op een fotografische studioplate.
+`--target white` levert een cutout op puur wit in 8:5, zoals de referenties in
+`carredo-imaging-refs/`.
+
+Dat is geen cosmetische keuze. Op wit bestaan de meeste problemen hieronder
+niet: er is geen vloerperspectief om te matchen, geen horizon, geen korrel, en
+geen omgeving waarmee de reflecties in de lak kunnen botsen. Het conflict
+tussen "wat de lak spiegelt" en "waar de auto staat" verdwijnt omdat er geen
+tweede verhaal is. `GRAIN` en `LIGHTWRAP` staan op wit daarom uit — allebei
+bestaan ze om tegen een fotografische plate te matchen.
+
+De schaalmodus verschilt ook. In een scene wil je fysieke consistentie
+(wielmaat), want daar staat de auto ergens. In een cutout-catalogus wil je
+consistente kadervulling ongeacht de hoek. Gemeten op de referenties: 73% en
+78% breed, onderkant op 76%, horizontaal gecentreerd.
+
+| | breedte | onderkant | midden-x |
+| --- | --- | --- | --- |
+| referentie (Kia) | 73% | 76% | 50% |
+| lizy_1 (Tesla) | 78% | 76% | 50% |
+| onze white-target | 76% | 75–76% | 50% |
+
+Let op: `carredo-imaging-refs/PROMPT.md` schrijft een middelpunt op 45% voor,
+maar de referentiebeelden zelf meten allebei 50%. De beelden zijn de
+benchmark, niet het document.
 
 ## Waarom een composiet "uitgeknipt" leest
 
