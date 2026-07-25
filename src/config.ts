@@ -389,6 +389,22 @@ export interface GenBgConfig {
    * en zit de overgang in de generatie zelf i.p.v. in een light wrap achteraf.
    */
   maskFeather: number;
+  /**
+   * Breedte van de guard-band rond het autosilhouet, als fractie van de
+   * autobreedte. Binnen die band wint het mathematische composiet.
+   *
+   * Zonder guard kan een generatief model carrosserie aangroeien BUITEN het
+   * masker, en daar reikt de paste-back-garantie niet. Gemeten op beeld (5):
+   * Qwen verlengde de achterkant met een volledig extra wiel inclusief
+   * wielkast, en de hallucinatie-poort miste dat omdat de detectiebox ervan
+   * overlapte met onze eigen auto.
+   *
+   * Afweging: de vloer vlak onder de auto komt hierdoor van de wiskunde en
+   * niet van het model, dus de contactschaduw wordt niet beter. Verder weg
+   * mag het model wel, en daar zit het grootste deel van de winst.
+   * 0 zet de guard uit.
+   */
+  guardBandRatio: number;
 }
 
 export interface GeminiConfig {
@@ -778,6 +794,7 @@ export const defaultConfig: Config = {
     maxAttempts: 3,
     fillMaxMegapixels: 1,
     maskFeather: 6,
+    guardBandRatio: 0.06,
   },
   GEMINI: {
     // Gemini 3.1 Flash met image-generation: Nano Banana (image editing)

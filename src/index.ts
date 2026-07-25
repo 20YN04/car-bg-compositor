@@ -894,6 +894,8 @@ async function processImage(
         // (autovorm omlaag geschoven mee-beschermen) werkte averechts: het
         // auto-vormige gat in het masker werd door FLUX ingevuld als een
         // tweede auto ónder de onze.
+        const carMeta = await sharp(carLayer.input).metadata();
+        const scaledCarW = carMeta.width ?? cfg.CANVAS.width;
         const keepShape = await sharp(carLayer.input)
           .ensureAlpha()
           .extractChannel(3)
@@ -1032,8 +1034,62 @@ async function processImage(
             .composite([{ input: ringMask, blend: "dest-in" }])
             .png()
             .toBuffer();
+          // GUARD: rond het autosilhouet wint het mathematische composiet.
+          //
+          // Zonder deze band kan het model carrosserie aangroeien buiten het
+          // masker, en dat valt precies buiten de paste-back-garantie. Op
+          // beeld (5) verlengde Qwen de achterkant met een compleet extra
+          // wiel inclusief wielkast; de hallucinatie-poort miste dat omdat de
+          // detectiebox ervan overlapte met onze eigen auto en door de
+          // IoU-filter als "onze auto" werd weggegooid.
+          //
+          // De prijs is dat de vloer vlak onder de auto — waar de
+          // contactschaduw zit — van de wiskunde blijft komen in plaats van
+          // van het model. Verder weg mag het model zijn scène leveren, en
+          // daar zit het grootste deel van de winst (vloertoon, verte, licht).
+          const guardLayers: sharp.OverlayOptions[] = [{ input: borderPatch }];
+          if (cfg.GENBG.guardBandRatio > 0) {
+            const band = Math.max(2, Math.round(scaledCarW * cfg.GENBG.guardBandRatio));
+            const carAlpha = await sharp(carLayer.input)
+              .ensureAlpha()
+              .extractChannel(3)
+              .png()
+              .toBuffer();
+            // blur + drempel groeit het silhouet met ongeveer `band` px; de
+            // tweede blur maakt er een zachte overgang van zodat de guard
+            // zelf geen zichtbare rand achterlaat
+            const grown = await sharp(carAlpha)
+              .blur(band)
+              .threshold(16)
+              .blur(Math.max(1, band / 3))
+              .removeAlpha()
+              .toColourspace("b-w")
+              .png()
+              .toBuffer();
+            const guardMask = await sharp({
+              create: {
+                width: cfg.CANVAS.width,
+                height: cfg.CANVAS.height,
+                channels: 3,
+                background: { r: 0, g: 0, b: 0 },
+              },
+            })
+              .composite([{ input: grown, left: carLayer.left, top: carLayer.top }])
+              .removeAlpha()
+              .toColourspace("b-w")
+              .png()
+              .toBuffer();
+            guardLayers.push({
+              input: await sharp(mathComposite)
+                .removeAlpha()
+                .joinChannel(guardMask)
+                .png()
+                .toBuffer(),
+            });
+          }
+          guardLayers.push(carLayer);
           const candidate = await sharp(sceneFull)
-            .composite([{ input: borderPatch }, carLayer])
+            .composite(guardLayers)
             .png()
             .toBuffer();
           const checkJpeg = await sharp(candidate).jpeg({ quality: 85 }).toBuffer();
