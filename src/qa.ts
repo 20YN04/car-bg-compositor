@@ -13,6 +13,8 @@ export type QACode =
   | "OUT_OF_CANVAS"
   | "STRAY_MASK_REMOVED"
   | "SHADOW_IN_MASK"
+  | "GROUND_TRIM_CAPPED"
+  | "NOT_EXTERIOR"
   | "BACKGROUND_MERGE_SUSPECT"
   | "NO_CAR_DETECTED"
   | "PLATE_NOT_FOUND"
@@ -40,6 +42,62 @@ export interface QAInput {
     enabled: boolean;
     found: boolean;
   };
+}
+
+export interface ExteriorSignal {
+  name: string;
+  ok: boolean;
+}
+
+export interface ExteriorClassification {
+  isExterior: boolean;
+  score: number;
+  total: number;
+  signals: ExteriorSignal[];
+}
+
+/**
+ * Is dit een exterieuropname van een hele auto?
+ *
+ * Een listing bevat naast exterieurshots ook interieurfoto's (dashboard,
+ * stoelen, koffer) en detailopnames. Die mogen niet door de compositing:
+ * achtergrondvervanging, grondlijn en wielcontact zijn er betekenisloos, en
+ * het resultaat is een dashboard dat op een studiovloer zweeft.
+ *
+ * De classificatie kost niets: alle signalen worden al berekend voor de QA.
+ * We eisen niet dat álle signalen kloppen — een exterieurshot met een
+ * afgesneden auto faalt terecht op één signaal maar hoort wél door de
+ * pipeline. Vandaar een drempel op het aantal kloppende signalen.
+ */
+export function classifyExterior(
+  input: QAInput,
+  cfg: Config,
+  minSignals: number,
+): ExteriorClassification {
+  const { analysis, imgWidth, imgHeight } = input;
+  const qa = cfg.QA;
+  const bbox = analysis.bbox;
+  const areaFraction = analysis.area / Math.max(1, imgWidth * imgHeight);
+  const aspect = bbox
+    ? (bbox.right - bbox.left + 1) / Math.max(1, bbox.bottom - bbox.top + 1)
+    : 0;
+
+  const signals: ExteriorSignal[] = [
+    // detectie uit → neutraal (telt als kloppend), anders moet er een auto zijn
+    { name: "auto gedetecteerd", ok: !input.detection.enabled || input.detection.found },
+    { name: "één samenhangend masker", ok: analysis.blobCount === 1 },
+    {
+      name: "maskeroppervlak plausibel",
+      ok: areaFraction >= qa.minMaskArea && areaFraction <= qa.maxMaskArea,
+    },
+    { name: "verhouding als een auto", ok: aspect >= qa.minAspect && aspect <= qa.maxAspect },
+    {
+      name: "wielcontact gevonden",
+      ok: analysis.groundLine !== null && !analysis.groundFallback,
+    },
+  ];
+  const score = signals.filter((s) => s.ok).length;
+  return { isExterior: score >= minSignals, score, total: signals.length, signals };
 }
 
 /**

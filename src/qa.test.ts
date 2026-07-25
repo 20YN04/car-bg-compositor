@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { AlphaAnalysis } from "./bbox.js";
 import type { Placement } from "./composite.js";
 import { defaultConfig } from "./config.js";
-import { runQA, type QAInput } from "./qa.js";
+import { classifyExterior, runQA, type QAInput } from "./qa.js";
 
 // AI_MASK_SUSPECT en AI_NOT_GROUNDED komen uit de VLM-checks in index.ts en
 // vallen buiten runQA; alle overige codes worden hier afgedekt.
@@ -145,5 +145,56 @@ describe("runQA", () => {
 
     const disabled = baseInput({ plate: { enabled: false, found: false } });
     expect(codes(disabled)).not.toContain("PLATE_NOT_FOUND");
+  });
+});
+
+describe("classifyExterior", () => {
+  const MIN = defaultConfig.ROUTING.minExteriorSignals;
+  const classify = (input: QAInput) => classifyExterior(input, defaultConfig, MIN);
+
+  it("herkent een schone exterieuropname", () => {
+    const c = classify(baseInput());
+    expect(c.isExterior).toBe(true);
+    expect(c.score).toBe(c.total);
+  });
+
+  it("weigert een interieuropname: geen auto, geen wielcontact, vierkante blob", () => {
+    // dashboard-shot: het matte-model pakt een groot, ongeveer vierkant vlak,
+    // er is geen auto-box en geen wielplateau
+    const c = classify(
+      baseInput({
+        analysis: {
+          ...baseAnalysis(),
+          bbox: { left: 50, top: 50, right: 849, bottom: 849 }, // aspect 1.0
+          area: 640_000, // 64%
+          groundLine: 849,
+          groundFallback: true,
+          blobCount: 2,
+        },
+        detection: { enabled: true, found: false, outsideBoxRemoved: 0 },
+      }),
+    );
+    expect(c.isExterior).toBe(false);
+    expect(c.signals.filter((s) => !s.ok).map((s) => s.name)).toContain("wielcontact gevonden");
+  });
+
+  it("laat een exterieurshot met één afwijkend signaal er wél door", () => {
+    // afgesneden auto: percentiel-grondlijn i.p.v. wielplateau, verder normaal.
+    // Zo'n beeld hoort de compositing in te gaan, met een QA-waarschuwing.
+    const c = classify(
+      baseInput({
+        analysis: { ...baseAnalysis(), groundFallback: true },
+      }),
+    );
+    expect(c.isExterior).toBe(true);
+    expect(c.score).toBe(c.total - 1);
+  });
+
+  it("telt auto-detectie als neutraal wanneer die uitstaat", () => {
+    const c = classify(
+      baseInput({ detection: { enabled: false, found: false, outsideBoxRemoved: 0 } }),
+    );
+    expect(c.signals[0]!.ok).toBe(true);
+    expect(c.isExterior).toBe(true);
   });
 });

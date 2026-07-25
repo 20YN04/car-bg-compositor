@@ -22,17 +22,23 @@ export const localMaskStats: LocalMaskStats = {
 
 /**
  * Verwijdert de achtergrond via Python rembg (lokaal, gratis).
- * Eerste aanroep downloadt het u2net-model (~176 MB) naar ~/.u2net/.
+ * Eerste aanroep per model downloadt de gewichten naar ~/.u2net/.
+ *
+ * Het model zit in de bestandsnaam-suffix, niet in de hash: dat scheidt de
+ * modellen net zo goed, maar houdt de sleutel van het default-model (u2net)
+ * gelijk aan die van vóór deze parameter — bestaande maskers blijven geldig.
  *
  * @returns PNG buffer met transparante achtergrond (RGBA)
  */
 export async function removeBackgroundLocal(
   inputPath: string,
   useCache = true,
+  model = "u2net",
 ): Promise<Buffer> {
   const inputBytes = await readFile(inputPath);
   const hash = createHash("sha256").update(inputBytes).digest("hex");
-  const cachePath = path.join(CACHE_DIR, `${hash}.rembg.png`);
+  const suffix = model === "u2net" ? "rembg" : `rembg-${model}`;
+  const cachePath = path.join(CACHE_DIR, `${hash}.${suffix}.png`);
 
   if (useCache && existsSync(cachePath)) {
     localMaskStats.cacheHits++;
@@ -43,11 +49,11 @@ export async function removeBackgroundLocal(
 
   // Python rembg: u2net model, output naar stdout als PNG
   const script = `
-import sys, base64
+import sys
 from rembg import remove, new_session
 from PIL import Image
 
-session = new_session('u2net')
+session = new_session(sys.argv[3])
 img = Image.open(sys.argv[1])
 output = remove(img, session=session)
 output.save(sys.argv[2], 'PNG')
@@ -59,8 +65,10 @@ output.save(sys.argv[2], 'PNG')
   await writeFile(tmpScript, script);
 
   localMaskStats.calls++;
-  await execFileAsync("python3", [tmpScript, inputPath, tmpOut], {
-    timeout: 120_000,
+  await execFileAsync("python3", [tmpScript, inputPath, tmpOut, model], {
+    // birefnet/bria draaien zwaarder dan u2net en downloaden bij de eerste
+    // aanroep hun gewichten
+    timeout: 600_000,
     maxBuffer: 10 * 1024 * 1024,
   });
 

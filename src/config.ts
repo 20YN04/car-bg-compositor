@@ -49,7 +49,39 @@ export interface DetectConfig {
   boxMargin: number; // marge rond de auto-box als fractie van de boxmaat
 }
 
-export type MatteProvider = "fal-birefnet" | "fal-rmbg" | "api4ai";
+export type SegmentProvider = "florence-sam2" | "sam3";
+
+export interface SegmentConfig {
+  /**
+   * Hoe "vind object X en geef me zijn masker" wordt opgelost.
+   *
+   * florence-sam2 (default): Florence-2 zet een tekstprompt om in boxes, SAM 2
+   * maakt daar maskers van. Twee calls, twee modellen, twee foutkansen — en de
+   * bekende faalmodus dat Florence een lange prompt op "the car" ground en een
+   * full-frame box teruggeeft.
+   *
+   * sam3: SAM 3 doet detectie én segmentatie in één call uit dezelfde
+   * tekstprompt (open-vocabulary concept segmentation, ICLR 2026). Eén call,
+   * één model, plus per-masker scores waarop gefilterd kan worden.
+   *
+   * NOG NIET GEVERIFIEERD tegen een echte respons — daarom niet de default.
+   * Zet 'm aan met --segment sam3 en controleer één beeld voordat je een
+   * batch draait; let vooral op de box-conventie (zie toAbsoluteBox).
+   */
+  provider: SegmentProvider;
+  modelId: string; // fal-ai/sam-3/image
+  costPerCall: number; // $0.005, gepubliceerd tarief (niet geschat)
+  maxMasks: number;
+  minScore: number; // per-masker confidence-drempel
+  prompts: {
+    car: string;
+    windows: string;
+    plate: string;
+    wheels: string;
+  };
+}
+
+export type MatteProvider = "fal-birefnet" | "fal-rmbg" | "rembg" | "api4ai";
 
 export interface MatteConfig {
   /**
@@ -64,6 +96,17 @@ export interface MatteConfig {
   /** Basis-matte-model; de SAM2-combine en box-begrenzing blijven gelijk. */
   provider: MatteProvider;
   rmbgModelId: string; // fal-ai/bria/background/remove (RMBG 2.0)
+  /**
+   * Model voor provider 'rembg' (lokaal). Gemeten 2026-07-25 op één beeld
+   * (1600×1066, CPU, geen GPU-provider):
+   *   isnet-general-use  ~6 s, scherpe daklijn (~1px overgang)   ← default
+   *   u2net              ~6 s, brede wazige overgangsband
+   *   bria-rmbg (1,0 GB) >28 min, kwam niet door één beeld
+   *   birefnet-general (972 MB) idem
+   * De zware varianten zijn dus geen optie zonder GPU; tussen de lichte twee
+   * is isnet gratis winst bij gelijke snelheid.
+   */
+  rembgModel: string;
   /** Alfa-randen aanscherpen: overgangsband samenknijpen tot ~1px AA. */
   edgeSharpen: boolean;
   edgeLow: number; // alfa ≤ low → transparant
@@ -104,6 +147,13 @@ export interface PlateConfig {
 
 export interface AiConfig {
   enabled: boolean;
+  /**
+   * De twee VLM-kwaliteitscontroles (masker compleet? auto op de grond?) zijn
+   * ontwikkelgereedschap: ze schrijven alleen waarschuwingen in run.jsonl en
+   * veranderen het beeld niet. In productie zijn ze ~17% van de kosten per
+   * beeld. Uit te zetten met --no-qa, zonder de plaat-anonimisatie te raken.
+   */
+  qaChecks: boolean;
   plateText: string; // tekst op de vervangende nummerplaat
   detectionModelId: string; // plaatdetectie (bbox uit tekstprompt)
   vlmModelId: string; // visual question answering voor AI-kwaliteitscontrole
@@ -112,10 +162,37 @@ export interface AiConfig {
   costPerSegment: number;
 }
 
+export interface RoutingConfig {
+  /**
+   * Niet-exterieurfoto's (interieur, dashboard, koffer, detailopnames) uit de
+   * compositing houden. Achtergrondvervanging, grondlijn en wielcontact zijn
+   * daar betekenisloos; zonder deze poort belandt een dashboard op de
+   * studiovloer en wordt dat gewoon weggeschreven.
+   *
+   * Zulke foto's krijgen wél de kleurcorrectie van de set, de finishing grade
+   * en de branding, zodat de listing als geheel consistent blijft.
+   */
+  enabled: boolean;
+  /**
+   * Hoeveel van de vijf exterieursignalen moeten kloppen (zie
+   * classifyExterior). 4 van 5 laat een exterieurshot met één afwijkend
+   * signaal — afgesneden auto, tweede blob — nog door, maar houdt een
+   * interieuropname tegen die er op meerdere fronten naast zit.
+   */
+  minExteriorSignals: number;
+}
+
 export interface HarmonizeConfig {
   enabled: boolean;
   strength: number; // 0..1: hoe ver richting de achtergrondtoon
   maxGain: number; // cap op de per-kanaal gain-afwijking (bv. 0.12 = ±12%)
+  /**
+   * Alle foto's van één auto (= één submap in ./in/) eerst naar een gedeeld
+   * witpunt trekken, daarna de set als geheel naar de plate-toon. Zonder dit
+   * krijgt elke foto zijn eigen correctie en leest een set die deels in de
+   * ochtend en deels in de namiddag is geschoten als twee auto's.
+   */
+  setConsistent: boolean;
 }
 
 export interface FinishConfig {
@@ -183,10 +260,11 @@ export interface GenBgConfig {
 export interface GeminiConfig {
   modelId: string;
   costPerCall: number;
-  /** Prompt voor showroom-compositing: Gemini plaatst auto op achtergrond met stijlrefs. */
-  showroomPrompt: string;
-  /** Pad naar de target-achtergrond. */
-  backgroundPath: string;
+  /** Prefix voor de GENBG-prompt: vertelt Gemini dat het zwarte silhouet een placeholder is. */
+  maskPrefix: string;
+  /** Moet de canvasverhouding volgen, anders klopt de scènegeometrie niet. */
+  aspectRatio: "1:1" | "2:3" | "3:2" | "3:4" | "4:3" | "4:5" | "5:4" | "9:16" | "16:9" | "21:9";
+  imageSize: "1K" | "2K" | "4K";
 }
 
 export type AnglePreset = "side" | "front34" | "rear34";
@@ -237,6 +315,18 @@ export interface Config {
   CAR_WIDTH_RATIO: number; // fractie canvasbreedte
   ALPHA_THRESHOLD: number;
   GROUND_PERCENTILE: number;
+  /**
+   * Bovengrens op de grondtrim, als fractie van de bboxhoogte. De trim gaat
+   * ervan uit dat álles onder de wielcontactlijn aangesmolten slagschaduw is.
+   * Bij een lage camera in 3/4 hangt de voorspoiler in projectie lager dan het
+   * contactpunt van de band — dat is perspectief, geen schaduw. Op beeld (6)
+   * van de Taycan-set sneed een ongelimiteerde trim 61px (7,9% van de
+   * bboxhoogte) echte carrosserie weg. Gemeten over die set van 13: de
+   * legitieme trims liggen tussen 0,9% en 2,7%, het defect op 7,9% — bij 3%
+   * bindt de klem dus op precies dat ene beeld en op geen enkel ander.
+   * Bindt hij, dan volgt een GROUND_TRIM_CAPPED-waarschuwing om na te kijken.
+   */
+  GROUND_TRIM_MAX_RATIO: number;
   ERODE_MASK: boolean; // 1px erosie tegen kleurhalo's van de originele achtergrond
   MASK_CLEAN: MaskCleanConfig; // opschoning: dunne/losstaande structuren (windmolen, paal) weg
   SHADOW: ShadowConfig;
@@ -245,6 +335,7 @@ export interface Config {
   QA: QAConfig;
   FAL: FalConfig;
   DETECT: DetectConfig;
+  SEGMENT: SegmentConfig; // detectie+segmentatie in één (SAM 3) of tweetraps
   MATTE: MatteConfig;
   AI: AiConfig;
   PLATE: PlateConfig;
@@ -256,6 +347,7 @@ export interface Config {
   GEMINI: GeminiConfig; // Google Gemini Nano Banana (image editing)
   BACKGROUND_PROFILES: Record<string, BackgroundProfile>; // key = bestandsnaam
   DEFAULT_PROFILE: BackgroundProfile;
+  ROUTING: RoutingConfig;
   HARMONIZE: HarmonizeConfig;
   PRESETS: Record<AnglePreset, PresetOverride>; // fase 4: per-hoek kadrering
   COST_PER_CALL_USD: number;
@@ -268,6 +360,7 @@ export const defaultConfig: Config = {
   CAR_WIDTH_RATIO: 0.82,
   ALPHA_THRESHOLD: 10,
   GROUND_PERCENTILE: 0.95,
+  GROUND_TRIM_MAX_RATIO: 0.03,
   ERODE_MASK: false,
   MASK_CLEAN: {
     enabled: true,
@@ -314,6 +407,21 @@ export const defaultConfig: Config = {
     minConfidence: 0.05,
     boxMargin: 0.02,
   },
+  SEGMENT: {
+    provider: "florence-sam2",
+    modelId: "fal-ai/sam-3/image",
+    costPerCall: 0.005,
+    maxMasks: 8, // ruiten: voorruit + zijruiten + achterruit halen dit makkelijk
+    minScore: 0.4,
+    // korte, concrete noun phrases: SAM 3 is daarop getraind. Meerdere
+    // concepten kommagescheiden in één prompt.
+    prompts: {
+      car: "car",
+      windows: "car window, windshield",
+      plate: "license plate",
+      wheels: "wheel",
+    },
+  },
   MATTE: {
     enabled: true,
     dilateRadius: 4,
@@ -321,14 +429,20 @@ export const defaultConfig: Config = {
     // A/B op ARV/RV/RVV (2026-07-23): RMBG 2.0 geeft vollere, rondere
     // bandonderkanten (BiRefNet plat de band bij RV licht af) bij even
     // scherpe spaken; geen halo's in beide. Daarom default rmbg.
+    // A/B op ARV/RV/RVV (2026-07-23): RMBG 2.0 geeft vollere, rondere
+    // bandonderkanten (BiRefNet plat de band bij RV licht af) bij even scherpe
+    // spaken; geen halo's in beide. Daarom default rmbg.
+    // Zonder geldige FAL_KEY: 'rembg' (lokaal, gratis, grovere daklijn).
     provider: "fal-rmbg",
     rmbgModelId: "fal-ai/bria/background/remove",
+    rembgModel: "isnet-general-use",
     edgeSharpen: true,
     edgeLow: 64,
     edgeHigh: 192,
   },
   AI: {
     enabled: true,
+    qaChecks: true,
     plateText: "CARREDO",
     detectionModelId: "fal-ai/florence-2-large/caption-to-phrase-grounding",
     vlmModelId: "fal-ai/moondream2/visual-query",
@@ -369,9 +483,11 @@ export const defaultConfig: Config = {
       toneBrightness: 0.94,
       toneWarmth: 0,
     },
-    // gekalibreerd op de betonvloer-showroomplate (1440×938 → cover 1920×1440)
+    // gekalibreerd op de betonvloer-showroomplate (1536×1024 → cover 1920×1440).
+    // horizonY opgemeten op de plate zelf: sterkste horizontale luminantierand
+    // in het middelste beeldderde (224 → 199 over 4px) ligt op y=879.
     "showroom.jpg": {
-      horizonY: 867,
+      horizonY: 879,
       // 1195 i.p.v. 1150: bij sterke 3/4-views staat het verre wiel door de
       // gebakken fotoperspectief tot ~300px hoger dan het nabije wiel; met de
       // contactlijn dieper op de vloer blijft ook dat wiel onder de
@@ -407,10 +523,15 @@ export const defaultConfig: Config = {
     toneBrightness: 1,
     toneWarmth: 0,
   },
+  ROUTING: {
+    enabled: true,
+    minExteriorSignals: 4,
+  },
   HARMONIZE: {
     enabled: true,
     strength: 0.35,
     maxGain: 0.12,
+    setConsistent: true,
   },
   HIGHLIGHTS: {
     enabled: true,
@@ -425,7 +546,14 @@ export const defaultConfig: Config = {
     saturation: 1.05,
   },
   GENBG: {
-    enabled: true,
+    /**
+     * Uit sinds de gekalibreerde studioplate (backgrounds/showroom.jpg) er is:
+     * die levert dezelfde look deterministisch, gratis en zonder de hele
+     * hallucinatieklasse (tweede auto, podium, verzonnen uitlaten, pseudo-
+     * tekst) die de VLM-poorten hieronder moesten afvangen. Aanzetten met
+     * --genbg hero|all blijft mogelijk voor experimenten.
+     */
+    enabled: false,
     mode: "hero",
     provider: "flux",
     modelId: "fal-ai/flux-pro/v1/fill",
@@ -446,23 +574,22 @@ export const defaultConfig: Config = {
     fillMaxMegapixels: 1,
   },
   GEMINI: {
+    // Gemini 3.1 Flash met image-generation: Nano Banana (image editing)
     modelId: "gemini-3.1-flash-image",
-    costPerCall: 0.02,
-    backgroundPath: "backgrounds/showroom_bg.png",
-    showroomPrompt:
-      "Take the car from the FIRST image and place it into the grey studio " +
-      "shown in the SECOND image. The remaining images (3-6) are reference " +
-      "examples showing the desired result — match their positioning, scale, " +
-      "lighting, and shadow exactly.\n\n" +
-      "POSITIONING: Car centered on polished concrete floor, soft contact " +
-      "shadow under tires, subtle floor reflection. Studio like an aircraft " +
-      "hangar — ≥6m between car and back wall, ≥30% image height of empty " +
-      "floor behind car. Camera ~1.7m slightly tilted down.\n\n" +
-      "CAR: Match source camera angle exactly. Preserve original paint, " +
-      "wheels, rims, badges, headlights. Do NOT alter the car. Replace only " +
-      "reflections (swap trees/sky for grey studio). Windows = dark tinted.\n\n" +
-      "OUTPUT: Photorealistic studio photo. No extra cars, people, text, " +
-      "watermarks. 8:5 aspect ratio.",
+    costPerCall: 0.02, // schatting — ijken op Google AI Studio dashboard
+    /**
+     * Extra prompt-prefix voor Gemini: het model krijgt een beeld met
+     * een zwart gemaskeerde auto-silhouet — zonder deze instructie vult
+     * Gemini dat zwarte gat op met een zelf verzonnen auto.
+     */
+    maskPrefix:
+      "The black silhouette is a masked-out placeholder for a car. " +
+      "Do NOT draw or generate any car, vehicle, or object in the black " +
+      "area. Only generate the photo studio background around and behind " +
+      "the black silhouette. ",
+    // CANVAS is 1920×1440 = 4:3; een afwijkende ratio wordt weggecropt
+    aspectRatio: "4:3",
+    imageSize: "2K",
   },
   PRESETS: {
     side: { spanMeters: 4.3 },

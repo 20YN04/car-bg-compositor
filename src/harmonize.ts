@@ -47,11 +47,82 @@ export function cutoutMeans(
   return { r: r / w, g: g / w, b: b / w };
 }
 
+export interface Gains {
+  r: number;
+  g: number;
+  b: number;
+}
+
+const lum = (m: ChannelMeans): number => 0.2126 * m.r + 0.7152 * m.g + 0.0722 * m.b;
+
+/**
+ * Gains die `from` richting `to` trekken: per-kanaal white-balance t.o.v. de
+ * eigen luminantie, plus een halve stap exposure. Beide gecapt op maxGain.
+ * Puur rekenkundig; niets wordt hier toegepast.
+ */
+export function computeGains(
+  from: ChannelMeans,
+  to: ChannelMeans,
+  strength: number,
+  maxGain: number,
+): Gains {
+  const fromLum = Math.max(1, lum(from));
+  const toLum = Math.max(1, lum(to));
+  const clamp = (v: number): number => Math.min(1 + maxGain, Math.max(1 - maxGain, v));
+  const wb = (fromC: number, toC: number): number =>
+    clamp(1 + strength * (toC / toLum / (fromC / fromLum) - 1));
+  const exposure = clamp(1 + strength * 0.5 * (toLum / fromLum - 1));
+  return {
+    r: wb(from.r, to.r) * exposure,
+    g: wb(from.g, to.g) * exposure,
+    b: wb(from.b, to.b) * exposure,
+  };
+}
+
+/** Per-kanaal mediaan: robuust tegen één afwijkende opname in de set. */
+export function medianMeans(list: ChannelMeans[]): ChannelMeans {
+  if (list.length === 0) return { r: 128, g: 128, b: 128 };
+  const mid = (xs: number[]): number => {
+    const s = [...xs].sort((a, b) => a - b);
+    const i = Math.floor(s.length / 2);
+    return s.length % 2 ? (s[i] ?? 0) : ((s[i - 1] ?? 0) + (s[i] ?? 0)) / 2;
+  };
+  return {
+    r: mid(list.map((m) => m.r)),
+    g: mid(list.map((m) => m.g)),
+    b: mid(list.map((m) => m.b)),
+  };
+}
+
+/** Gains op de gemaskeerde pixels toepassen (in-place). */
+export function applyGains(
+  rgba: Buffer,
+  alpha: Uint8Array,
+  width: number,
+  height: number,
+  gains: Gains,
+): void {
+  for (let i = 0; i < width * height; i++) {
+    if ((alpha[i] ?? 0) === 0) continue;
+    const p = i * 4;
+    rgba[p] = Math.min(255, Math.round((rgba[p] ?? 0) * gains.r));
+    rgba[p + 1] = Math.min(255, Math.round((rgba[p + 1] ?? 0) * gains.g));
+    rgba[p + 2] = Math.min(255, Math.round((rgba[p + 2] ?? 0) * gains.b));
+  }
+}
+
 /**
  * Fase 3 — harmonisatie: trekt white-balance en exposure van de auto subtiel
  * richting de achtergrondtoon via per-kanaal lineaire gains (gecapt), zodat
  * de koele buitenlicht-zweem verdwijnt. Puur curves/levels op de bestaande
  * pixels — geen generatieve bewerking. Retourneert de toegepaste gains.
+ *
+ * `setReference` (optioneel) maakt de correctie set-consistent: elke foto van
+ * dezelfde auto wordt eerst naar het gedeelde witpunt van de set getrokken en
+ * daarna verschuift de héle set met één gedeelde gain naar de plate-toon.
+ * Zonder referentie krijgt elke foto zijn eigen correctie — een set die half
+ * bij ochtendlicht en half in de namiddagzon is geschoten leest dan als twee
+ * verschillende auto's.
  */
 export function harmonizeColors(
   rgba: Buffer,
@@ -61,30 +132,24 @@ export function harmonizeColors(
   car: ChannelMeans,
   bg: ChannelMeans,
   cfg: HarmonizeConfig,
-): { r: number; g: number; b: number } {
-  const lum = (m: ChannelMeans): number => 0.2126 * m.r + 0.7152 * m.g + 0.0722 * m.b;
-  const carLum = Math.max(1, lum(car));
-  const bgLum = Math.max(1, lum(bg));
-
-  // white-balance: kanaalverhoudingen t.o.v. de eigen luminantie gelijktrekken
-  const clamp = (v: number): number => Math.min(1 + cfg.maxGain, Math.max(1 - cfg.maxGain, v));
-  const wb = (carC: number, bgC: number): number =>
-    clamp(1 + cfg.strength * (bgC / bgLum / (carC / carLum) - 1));
-  // exposure: luminantie een fractie richting de achtergrond
-  const exposure = clamp(1 + cfg.strength * 0.5 * (bgLum / carLum - 1));
-
-  const gains = {
-    r: wb(car.r, bg.r) * exposure,
-    g: wb(car.g, bg.g) * exposure,
-    b: wb(car.b, bg.b) * exposure,
-  };
-  for (let i = 0; i < width * height; i++) {
-    if ((alpha[i] ?? 0) === 0) continue;
-    const p = i * 4;
-    rgba[p] = Math.min(255, Math.round((rgba[p] ?? 0) * gains.r));
-    rgba[p + 1] = Math.min(255, Math.round((rgba[p + 1] ?? 0) * gains.g));
-    rgba[p + 2] = Math.min(255, Math.round((rgba[p + 2] ?? 0) * gains.b));
+  setReference?: ChannelMeans,
+): Gains {
+  if (!setReference) {
+    const gains = computeGains(car, bg, cfg.strength, cfg.maxGain);
+    applyGains(rgba, alpha, width, height, gains);
+    return gains;
   }
+  // stap 1: dit beeld naar het witpunt van de set (volle sterkte — het doel is
+  // gelijkheid binnen de set, niet een subtiele nudge)
+  const toSet = computeGains(car, setReference, 1, cfg.maxGain);
+  // stap 2: de set als geheel richting de plate — identiek voor elk beeld
+  const toBg = computeGains(setReference, bg, cfg.strength, cfg.maxGain);
+  const gains: Gains = {
+    r: toSet.r * toBg.r,
+    g: toSet.g * toBg.g,
+    b: toSet.b * toBg.b,
+  };
+  applyGains(rgba, alpha, width, height, gains);
   return gains;
 }
 

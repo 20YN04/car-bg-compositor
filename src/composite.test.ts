@@ -181,6 +181,60 @@ describe("computePlacement", () => {
     expect(computeReflectionRect(p, 1439, CANVAS, 0.35)).toBeNull();
   });
 
+  it("spiegelt de ONDERKANT van de auto in de vloerreflectie, niet het dak", async () => {
+    // auto met een ondubbelzinnig verschil tussen boven- en onderhelft:
+    // dak puur blauw, onderkant puur rood. Onder de contactlijn hoort dus
+    // rood te verschijnen. sharp voert extract vóór flip uit, dus een
+    // flip().extract()-keten in één pipeline levert hier blauw op.
+    const srcW = 400;
+    const srcH = 200;
+    const rgba = Buffer.alloc(srcW * srcH * 4);
+    for (let y = 0; y < srcH; y++) {
+      for (let x = 0; x < srcW; x++) {
+        const i = (y * srcW + x) * 4;
+        if (y < srcH / 2) rgba[i + 2] = 255; // dak = blauw
+        else rgba[i] = 255; // onderkant = rood
+        rgba[i + 3] = 255;
+      }
+    }
+
+    const bbox: BBox = { left: 0, top: 0, right: srcW - 1, bottom: srcH - 1 };
+    const cfg: Config = structuredClone(defaultConfig);
+    // reflectie sterk en hoog genoeg om ondubbelzinnig te meten
+    cfg.DEFAULT_PROFILE = {
+      ...cfg.DEFAULT_PROFILE,
+      floorReflectivity: 1,
+      reflectionHeightRatio: 0.3,
+      glowStrength: 0,
+      vignetteStrength: 0,
+    };
+    cfg.FINISH = { ...cfg.FINISH, enabled: false };
+    const placement = computePlacement(
+      bbox, srcH - 1, cfg.CANVAS, GROUND_Y, cfg.CAR_WIDTH_RATIO,
+    );
+
+    const dir = await mkdtemp(path.join(tmpdir(), "cbc-refl-"));
+    const bgPath = path.join(dir, "bg.png");
+    await generateDefaultBackground(bgPath, cfg.CANVAS);
+
+    const { image } = await compositeImage(
+      {
+        rgba, width: srcW, height: srcH, bbox, placement, backgroundPath: bgPath,
+        profile: cfg.DEFAULT_PROFILE, contactY: GROUND_Y,
+      },
+      cfg,
+    );
+    const { data, info } = await sharp(image).raw().toBuffer({ resolveWithObject: true });
+
+    // net onder de contactlijn, in het midden van de auto
+    const x = Math.round(placement.x + placement.width / 2);
+    const y = GROUND_Y + 6;
+    const i = (y * info.width + x) * info.channels;
+    const r = data[i] ?? 0;
+    const b = data[i + 2] ?? 0;
+    expect(r).toBeGreaterThan(b);
+  });
+
   it("respecteert een aangepaste CAR_WIDTH_RATIO", () => {
     const bbox: BBox = { left: 0, top: 0, right: 499, bottom: 249 };
     const p = computePlacement(bbox, 249, CANVAS, GROUND_Y, 0.5);

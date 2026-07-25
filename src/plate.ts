@@ -383,6 +383,20 @@ export async function anonymizePlates(
           compositedPng, t.quad, t.region, canvas, plateCfg, plateText,
         );
         if (viaQuad) {
+          // dekgarantie vóór de quad-lagen: een SAM2-quad dat de plaat
+          // onderdekt (front-3/4 op (5): de onderste ~30% met EU-strip en
+          // tekens bleef leesbaar) mag geen leesbare plaat opleveren. De
+          // regiobrede blur ligt eronder, de gewarpte badge komt erbovenop —
+          // visueel identiek zolang het quad wél klopt, maar zonder de
+          // stille GDPR-faalmodus als het misgaat.
+          overlays.push(
+            await blurOverlay(
+              compositedPng,
+              t.region,
+              Math.max(plateCfg.blurSigma, Math.min(t.region.width, t.region.height) / 5),
+              Math.round(Math.min(t.region.width, t.region.height) * 0.1),
+            ),
+          );
           overlays.push(...viaQuad);
           continue;
         }

@@ -370,8 +370,12 @@ export async function compositeImage(
         `</linearGradient></defs>` +
         `<rect width="100%" height="100%" fill="url(#g)"/></svg>`,
     );
-    const reflection = await sharp(car)
-      .flip()
+    // flip en extract MOETEN in aparte pipelines: sharp voert extract uit vóór
+    // de flip, ongeacht de aanroepvolgorde. In één keten leverde dit de
+    // bovenste cropH rijen (het dak) gespiegeld onder de wielen in plaats van
+    // de onderkant van de auto.
+    const flipped = await sharp(car).flip().png().toBuffer();
+    const reflection = await sharp(flipped)
       .extract({ left: 0, top: 0, width: cropW, height: cropH })
       .composite([{ input: gradient, blend: "dest-in" }])
       .blur(2)

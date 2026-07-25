@@ -302,6 +302,36 @@ describe("wielcontact-grondlijn (regressie: slagschaduw onder wiel)", () => {
     expect(computeBBox(alpha, 400, 300, 10).bbox!.bottom).toBeLessThanOrEqual(242);
   });
 
+  it("de geklemde trim laat een voorspoiler onder de wiellijn staan", () => {
+    // lage 3/4-hoek: de voorspoiler zit dichter bij de camera dan het
+    // bandcontactpunt en projecteert daardoor lager. Ongeklemd zou de trim
+    // die hele lip als "aangesmolten schaduw" wegsnijden — beeld (6) van de
+    // Taycan-set verloor er 57 rijen carrosserie mee.
+    const alpha = makeAlpha(400, 300);
+    fillRect(alpha, 400, 100, 50, 299, 200); // romp
+    fillRect(alpha, 400, 130, 201, 170, 240); // wiel, contact op 240
+    fillRect(alpha, 400, 230, 201, 270, 240);
+    fillRect(alpha, 400, 100, 241, 200, 268); // voorspoiler: 28px lager
+
+    const bbox = computeBBox(alpha, 400, 300, 10).bbox!;
+    const bboxHeight = bbox.bottom - bbox.top + 1;
+    const groundLine = 240; // wielcontact, los van de percentiel-heuristiek
+    const slack = 4;
+
+    // ongeklemd: alles onder de wiellijn weg, inclusief de hele spoiler
+    const naive = new Uint8Array(alpha);
+    trimAlphaBelow(naive, 400, 300, groundLine + slack);
+    expect(computeBBox(naive, 400, 300, 10).bbox!.bottom).toBeLessThanOrEqual(244);
+
+    // geklemd op 3% van de bboxhoogte: de spoiler blijft grotendeels staan
+    const maxTrim = Math.round(bboxHeight * 0.03);
+    const cutY = Math.max(groundLine + slack, bbox.bottom - maxTrim);
+    trimAlphaBelow(alpha, 400, 300, cutY);
+    const after = computeBBox(alpha, 400, 300, 10).bbox!;
+    expect(after.bottom).toBeGreaterThan(groundLine + 10);
+    expect(after.bottom).toBe(bbox.bottom - maxTrim);
+  });
+
   it("legt de grondlijn op de bandlijn, niet op een schaduwkom onder de band", () => {
     const alpha = makeAlpha(400, 300);
     fillRect(alpha, 400, 100, 50, 299, 200); // romp

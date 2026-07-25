@@ -210,6 +210,55 @@ describe("anonymizePlates", () => {
     expect(await pixel(image, 10, 10)).toEqual(await pixel(img, 10, 10));
   });
 
+  it("mode replace dekt de hele regio, ook als het quad de plaat onderdekt", async () => {
+    // SAM2 leverde bij een front-3/4 een quad over alleen de bovenhelft van de
+    // plaat; de onderste ~30% (EU-strip + tekens) bleef daardoor leesbaar. De
+    // dekking mag niet van de quad-kwaliteit afhangen.
+    // tekens in de ONDERSTE helft van de plaat: precies het deel dat het quad
+    // niet dekt en dat op (5) leesbaar bleef
+    const img = await sharp(
+      Buffer.from(
+        `<svg width="200" height="100" xmlns="http://www.w3.org/2000/svg">` +
+          `<rect width="200" height="100" fill="#808080"/>` +
+          `<rect x="60" y="40" width="80" height="20" fill="#ffffff"/>` +
+          `<text x="63" y="59" font-size="11" fill="#000">ABC123</text>` +
+          `</svg>`,
+      ),
+    ).png().toBuffer();
+    // smal én laag quad: de badge wordt op de quad-breedte gerenderd en zijn
+    // hoogte is geklemd op wSpan/3.4, dus een te smal quad kan de onderband
+    // niet alsnog dekken door te groeien
+    const halfQuad = {
+      tl: { x: region.x, y: region.y },
+      tr: { x: region.x + region.width * 0.45, y: region.y },
+      br: { x: region.x + region.width * 0.45, y: region.y + region.height * 0.3 },
+      bl: { x: region.x, y: region.y + region.height * 0.3 },
+    };
+    const { image } = await anonymizePlates(
+      img, [{ region, quad: halfQuad }], canvas,
+      { ...defaultConfig.PLATE, mode: "replace" }, "X",
+    );
+    // criterium is leesbaarheid, niet kleur: een egaal vlak blurren verandert
+    // de kleur niet, maar tekens verdwijnen zodra het lokale contrast instort.
+    // Meet daarom de spreiding in de onderste band van de regio.
+    const band = {
+      left: region.x,
+      top: Math.round(region.y + region.height * 0.6),
+      width: region.width,
+      height: Math.max(2, Math.round(region.height * 0.4)),
+    };
+    // het defect is dat originele pixels onaangeroerd blijven: zonder de
+    // dekgarantie laat het quad-pad deze band exact zoals hij was staan
+    const grey = async (buf: Buffer): Promise<Buffer> =>
+      sharp(buf).extract(band).greyscale().raw().toBuffer();
+    const a = await grey(img);
+    const b = await grey(image);
+    let diff = 0;
+    for (let i = 0; i < a.length; i++) diff += Math.abs((a[i] ?? 0) - (b[i] ?? 0));
+    const meanAbsDiff = diff / a.length;
+    expect(meanAbsDiff).toBeGreaterThan(20);
+  });
+
   it("mode replace legt een donkere CARREDO-badge over de regio", async () => {
     const img = await testImage();
     const { image, status } = await anonymizePlates(
