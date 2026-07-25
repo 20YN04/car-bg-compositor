@@ -38,7 +38,12 @@ import {
   segmentByBoxes,
   visualYesNo,
 } from "./ai.js";
-import { geminiStats, generateScene } from "./gemini.js";
+import {
+  generateScene,
+  generateShowroomComposite,
+  geminiStats,
+  positioningGrid,
+} from "./gemini.js";
 import { generateSceneQwen, qwenStats } from "./qwen.js";
 import {
   applyGreenhouse,
@@ -187,8 +192,8 @@ function parseCli(): { cfg: Config; cli: CliOptions } {
     cfg.GENBG.enabled = true;
   }
   if (values["genbg-provider"] !== undefined) {
-    if (!["flux", "gemini", "qwen"].includes(values["genbg-provider"])) {
-      throw new Error("--genbg-provider moet flux, gemini of qwen zijn");
+    if (!["flux", "gemini", "qwen", "showroom"].includes(values["genbg-provider"])) {
+      throw new Error("--genbg-provider moet flux, gemini, qwen of showroom zijn");
     }
     cfg.GENBG.provider = values["genbg-provider"] as Config["GENBG"]["provider"];
   }
@@ -984,6 +989,92 @@ async function processImage(
         // Gemini: stuur het beeld met de auto zwart gemaskeerd — zo kan
         // het model de auto niet zien en dus ook niet dupliceren. FLUX
         // gebruikt het volledige composiet + separaat fill-mask.
+        // showroom-provider: meerdere invoerbeelden en een eigen samenstelling.
+        // De cutout gaat op transparantie mee (geen zwart gat), het
+        // positioneringsraster dicteert waar de auto komt, en daarna leggen we
+        // onze eigen autolaag exact in datzelfde rechthoek terug — dát is wat
+        // paste-back mogelijk maakt bij een model dat de hele scene tekent.
+        if (cfg.GENBG.provider === "showroom") {
+          const target = {
+            left: carLayer.left,
+            top: carLayer.top,
+            width: scaledCarW,
+            height: (await sharp(carLayer.input).metadata()).height ?? 1,
+          };
+          const grid = await sharp(
+            positioningGrid(cfg.CANVAS, target, profile.horizonY ?? contactYUsed - 200),
+          )
+            .png()
+            .toBuffer();
+          const cutoutPng = await sharp(carLayer.input).png().toBuffer();
+          const platePng = await sharp(backgroundPath)
+            .resize(cfg.CANVAS.width, cfg.CANVAS.height, { fit: "cover" })
+            .png()
+            .toBuffer();
+          const refs: Buffer[] = [];
+          for (const r of cfg.GEMINI.styleRefs) {
+            if (existsSync(r)) refs.push(await readFile(r));
+          }
+          for (let attempt = 0; attempt < cfg.GENBG.maxAttempts; attempt++) {
+            const scene = await generateShowroomComposite(
+              cutoutPng, platePng, grid, refs, cfg.GEMINI.showroomPrompt,
+              cfg.GEMINI, CACHE_DIR, cli.useCache, cfg.GENBG.seed + attempt,
+            );
+            const sceneFull = await sharp(scene)
+              .resize(cfg.CANVAS.width, cfg.CANVAS.height, { fit: "cover", position: "centre" })
+              .png()
+              .toBuffer();
+            // rasterresten meten: magenta en cyaan komen in een grijze studio
+            // niet voor, dus elke overgebleven pixel is een mislukking
+            const { data: sd, info: si } = await sharp(sceneFull)
+              .raw()
+              .toBuffer({ resolveWithObject: true });
+            let gridPixels = 0;
+            for (let i = 0; i < sd.length; i += si.channels) {
+              const r = sd[i] ?? 0, g = sd[i + 1] ?? 0, b = sd[i + 2] ?? 0;
+              if ((r > 150 && b > 150 && g < 100) || (g > 150 && b > 150 && r < 100)) gridPixels++;
+            }
+            const candidate = await sharp(sceneFull)
+              .composite([carLayer])
+              .png()
+              .toBuffer();
+            // tweede-auto-poort: het positioneringsraster bleek Gemini niet te
+            // weerhouden van het tekenen van een eigen auto naast de onze, en
+            // die staat buiten ons masker dus de paste-back dekt hem niet
+            const checkJpeg = await sharp(candidate).jpeg({ quality: 85 }).toBuffer();
+            const canvasArea = cfg.CANVAS.width * cfg.CANVAS.height;
+            const ownRect = {
+              x: carLayer.left, y: carLayer.top,
+              w: target.width, h: target.height,
+            };
+            const iou = (b: { x: number; y: number; w: number; h: number },
+                         r: { x: number; y: number; w: number; h: number }): number => {
+              const ix = Math.max(0, Math.min(b.x + b.w, r.x + r.w) - Math.max(b.x, r.x));
+              const iy = Math.max(0, Math.min(b.y + b.h, r.y + r.h) - Math.max(b.y, r.y));
+              const inter = ix * iy;
+              return inter / (b.w * b.h + r.w * r.h - inter);
+            };
+            let extraCars = 0;
+            try {
+              extraCars = (await detectCars(checkJpeg, CACHE_DIR, cfg.AI, cli.useCache))
+                .filter((b) => b.w * b.h > 0.02 * canvasArea)
+                .filter((b) => iou(b, ownRect) < 0.4).length;
+            } catch (err) {
+              noteFalFailure(err);
+            }
+            if (gridPixels < 500 && extraCars === 0) {
+              composited = candidate;
+              genbgApplied = true;
+              break;
+            }
+            console.warn(
+              `  ⚠ ${file}: showroom-poging ${attempt + 1} afgekeurd: ` +
+                (extraCars > 0
+                  ? `${extraCars} vreemde auto('s) — het model tekende er zelf een bij`
+                  : `${gridPixels} rasterpixels in de uitvoer`),
+            );
+          }
+        } else {
         const isGemini = cfg.GENBG.provider === "gemini";
         const isQwen = cfg.GENBG.provider === "qwen";
         // Zwart afdekken werkt NIET bij instructie-editors: ze lezen het
@@ -1202,6 +1293,7 @@ async function processImage(
                 ? `podium/vloermarkering (${platform.answer})`
                 : `verzonnen tekst ("${sceneText.slice(0, 40)}")`;
           console.warn(`  ⚠ ${file}: scène-poging ${attempt + 1} afgekeurd: ${reason}`);
+        }
         }
         if (!genbgApplied) {
           warnings.push({

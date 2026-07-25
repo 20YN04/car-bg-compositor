@@ -325,7 +325,7 @@ export interface HighlightConfig {
   strength: number; // 0..1
 }
 
-export type GenBgProvider = "flux" | "gemini" | "qwen";
+export type GenBgProvider = "flux" | "gemini" | "qwen" | "showroom";
 
 export interface QwenConfig {
   /**
@@ -412,6 +412,15 @@ export interface GeminiConfig {
   costPerCall: number;
   /** Prefix voor de GENBG-prompt: vertelt Gemini dat het zwarte silhouet een placeholder is. */
   maskPrefix: string;
+  /**
+   * Prompt voor de showroom-provider: meerdere invoerbeelden (cutout op
+   * transparantie, plate, positioneringsraster, stijlreferenties). Overgenomen
+   * uit carredo-imaging-refs/PROMPT.md — de aanpak die de live listings
+   * gebruiken.
+   */
+  showroomPrompt: string;
+  /** Stijlreferenties die als extra invoerbeelden meegaan. */
+  styleRefs: string[];
   /** Moet de canvasverhouding volgen, anders klopt de scènegeometrie niet. */
   aspectRatio: "1:1" | "2:3" | "3:2" | "3:4" | "4:3" | "4:5" | "5:4" | "9:16" | "16:9" | "21:9";
   imageSize: "1K" | "2K" | "4K";
@@ -955,6 +964,28 @@ export const defaultConfig: Config = {
       "Do NOT draw or generate any car, vehicle, or object in the black " +
       "area. Only generate the photo studio background around and behind " +
       "the black silhouette. ",
+    showroomPrompt:
+      "Take the car from the FIRST image (a transparent cutout) and place it " +
+      "into the studio shown in the SECOND image. The THIRD image is a " +
+      "POSITIONING GUIDE ONLY: place the car inside the magenta rectangle " +
+      "with its wheels on the rectangle's bottom edge, and render the " +
+      "wall/floor seam exactly on the cyan line. The output must contain ZERO " +
+      "magenta or cyan pixels. The remaining images are style references — " +
+      "match their lighting, floor reflection and overall look.\n\n" +
+      "CAMERA ANGLE: match the source cutout exactly, no rotation.\n" +
+      "FLOOR: polished concrete with a soft contact shadow and a clear " +
+      "reflection.\n" +
+      "REFLECTIONS ON THE CAR: preserve the paint finish; swap only what is " +
+      "reflected (trees and sky become the grey studio). Windows are dark " +
+      "tinted glass.\n" +
+      "NEVER alter the shape, wheels, rims, badges or headlights of the car.\n" +
+      "No other cars, no people, no text, no watermarks.",
+    styleRefs: [
+      "carredo-imaging-refs/assets/thumbnail_reference.webp",
+      "carredo-imaging-refs/style_refs/lizy_1.webp",
+      "carredo-imaging-refs/style_refs/lizy_2.webp",
+      "carredo-imaging-refs/style_refs/lizy_3.webp",
+    ],
     // CANVAS is 1920×1440 = 4:3; een afwijkende ratio wordt weggecropt
     aspectRatio: "4:3",
     imageSize: "2K",
