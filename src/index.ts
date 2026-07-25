@@ -566,6 +566,9 @@ async function processImage(
   // Roteren is een starre transformatie van de originele pixels: niets
   // bijverzonnen, alleen anders neergezet.
   let levelled = 0;
+  // wat de detecties hierna te zien krijgen: gelijk aan inputBytes tenzij de
+  // auto rechtgezet is
+  let workBytes: Buffer = inputBytes;
   if (analysis.bbox) {
     const decision = decideLevel(analysis.contactClusters, analysis.bbox, cfg.LEVEL);
     if (decision.applied) {
@@ -582,6 +585,17 @@ async function processImage(
       for (let i = 0; i < alpha.length; i++) alpha[i] = data[i * 4 + 3] ?? 0;
       // opnieuw meten: bbox, grondlijn en wielcontacten liggen nu anders
       analysis = analyse();
+      // Het bronbeeld moet mee draaien. Alle detecties hierna (ruiten, plaat,
+      // wielen) draaien op deze bytes en leveren coordinaten in dat frame; laat
+      // je ze op het onbewerkte beeld staan, dan komt het raammasker scheef op
+      // de gedraaide auto en landen de contactschaduwen op de oude wiellijn.
+      // Naar dezelfde afmetingen forceren zodat de twee frames per definitie
+      // samenvallen, ook als de matte ooit op een andere resolutie uitkomt.
+      workBytes = await sharp(inputBytes)
+        .rotate(decision.rotate, { background: { r: 128, g: 128, b: 128 } })
+        .resize(width, height, { fit: "fill" })
+        .jpeg({ quality: 95 })
+        .toBuffer();
       levelled = decision.rotate;
     }
   }
@@ -619,10 +633,10 @@ async function processImage(
         cfg.SEGMENT.providers.wheels === "sam3"
           ? (
               await segmentByText(
-                inputBytes, cfg.SEGMENT.prompts.wheels, CACHE_DIR, cfg.SEGMENT, cli.useCache,
+                workBytes, cfg.SEGMENT.prompts.wheels, CACHE_DIR, cfg.SEGMENT, cli.useCache,
               )
             ).boxes
-          : await detectWheels(inputBytes, CACHE_DIR, cfg.AI, cli.useCache);
+          : await detectWheels(workBytes, CACHE_DIR, cfg.AI, cli.useCache);
       const wheelBoxes = filterBoxesOnCar(
         rawWheels.filter(
           (w) =>
@@ -781,7 +795,7 @@ async function processImage(
       const useSam3 = cfg.SEGMENT.providers.windows === "sam3";
       const sam3Windows = useSam3
         ? await segmentByText(
-            inputBytes, cfg.SEGMENT.prompts.windows, CACHE_DIR, cfg.SEGMENT, cli.useCache,
+            workBytes, cfg.SEGMENT.prompts.windows, CACHE_DIR, cfg.SEGMENT, cli.useCache,
           )
         : null;
       const detectedWindows = sam3Windows
@@ -789,7 +803,7 @@ async function processImage(
         : (
             await Promise.all(
               cfg.WINDOWS.detectPrompts.map((prompt) =>
-                detectWindows(inputBytes, prompt, CACHE_DIR, cfg.AI, cli.useCache),
+                detectWindows(workBytes, prompt, CACHE_DIR, cfg.AI, cli.useCache),
               ),
             )
           ).flat();
@@ -802,7 +816,7 @@ async function processImage(
         const maskPng = sam3Windows
           ? await fetchUnionMask(sam3Windows, width, height)
           : await segmentByBoxes(
-              inputBytes, onCar, cfg.WINDOWS.segmentModelId, CACHE_DIR, cli.useCache,
+              workBytes, onCar, cfg.WINDOWS.segmentModelId, CACHE_DIR, cli.useCache,
             );
         const maskRaw = await sharp(maskPng)
           .resize(width, height, { fit: "fill" })
@@ -870,7 +884,7 @@ async function processImage(
     // PLATE_NOT_FOUND-status verderop komt in run.jsonl terecht
     let detected: PlateBox[] = [];
     try {
-      detected = await detectPlates(inputBytes, CACHE_DIR, cfg.AI, cli.useCache);
+      detected = await detectPlates(workBytes, CACHE_DIR, cfg.AI, cli.useCache);
     } catch (err) {
       noteFalFailure(err);
       console.warn(
@@ -898,7 +912,7 @@ async function processImage(
       const src = srcPlates[i]!;
       try {
         const maskPng = await segmentByBoxes(
-          inputBytes, [src], cfg.WINDOWS.segmentModelId, CACHE_DIR, cli.useCache,
+          workBytes, [src], cfg.WINDOWS.segmentModelId, CACHE_DIR, cli.useCache,
         );
         const raw = await sharp(maskPng)
           .resize(width, height, { fit: "fill" })
