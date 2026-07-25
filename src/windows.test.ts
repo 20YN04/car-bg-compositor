@@ -141,6 +141,58 @@ describe("applyGreenhouse", () => {
     expect(g.rgba[p]!).toBeLessThan(130);
   });
 
+  /**
+   * Glas met twee structuurschalen naast elkaar, zoals een echte ruit ze
+   * draagt: een 1px wisserrand en een golvende modulatie over ~16px die staat
+   * voor gespiegeld bladerdek. De band-pass hoort de eerste te sparen en de
+   * tweede weg te halen; met één blurniveau kun je die twee niet scheiden.
+   */
+  function twoScaleGlass(n: number) {
+    const g = glass(n);
+    const fine = new Uint8Array(n);
+    for (let i = 0; i < n; i++) {
+      const mottle = 26 * Math.sin((i / 16) * 2 * Math.PI);
+      const wiper = i === Math.floor(n / 2);
+      const lum = 60 + mottle + (wiper ? 90 : 0);
+      const v = Math.max(0, Math.min(255, Math.round(lum)));
+      g.rgba[i * 4] = v;
+      g.rgba[i * 4 + 1] = v;
+      g.rgba[i * 4 + 2] = v;
+      g.lowFreq[i] = 60; // grove blur: middelt de golf én de wisser weg
+      fine[i] = Math.max(0, Math.min(255, Math.round(60 + mottle))); // fijne blur: houdt de golf, mist de wisser
+    }
+    return { ...g, fine };
+  }
+
+  it("dempt de gespiegelde omgeving in het glas maar spaart de autoranden", () => {
+    const n = 64;
+    const g = twoScaleGlass(n);
+    const lum = (b: Buffer, i: number) =>
+      0.2126 * b[i * 4]! + 0.7152 * b[i * 4 + 1]! + 0.0722 * b[i * 4 + 2]!;
+    const mid = Math.floor(n / 2);
+    applyGreenhouse(
+      g.rgba, g.alpha, g.mask, g.lowFreq, n, 1, PLATE, CFG, 1, g.fine, 0.25,
+    );
+
+    // de golf: pieken en dalen liggen op 1/4 en 3/4 van elke periode van 16px
+    const swing = Math.abs(lum(g.rgba, 4) - lum(g.rgba, 12));
+    expect(swing).toBeLessThan(0.4 * 52); // 52 = volle amplitude van de golf
+
+    // de wisser steekt nog steeds ver boven zijn directe buren uit
+    expect(lum(g.rgba, mid)).toBeGreaterThan(lum(g.rgba, mid - 2) + 60);
+  });
+
+  it("zonder fijne band gedraagt greenhouse zich exact als voorheen", () => {
+    const n = 64;
+    const a = twoScaleGlass(n);
+    const b = twoScaleGlass(n);
+    applyGreenhouse(a.rgba, a.alpha, a.mask, a.lowFreq, n, 1, PLATE, CFG, 1);
+    applyGreenhouse(
+      b.rgba, b.alpha, b.mask, b.lowFreq, n, 1, PLATE, CFG, 1, b.fine, 1,
+    );
+    expect(a.rgba.equals(b.rgba)).toBe(true);
+  });
+
   it("raakt niets buiten het raammasker", () => {
     const n = 21;
     const g = glass(n);

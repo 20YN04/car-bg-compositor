@@ -141,6 +141,16 @@ export interface WindowsConfig {
   greenhouseDetail: number;
   /** Blurstraal voor de laagfrequentie-scheiding, in px. */
   greenhouseLowFreqRadius: number;
+  /**
+   * Blurstraal die "rand van de auto" van "gespiegelde omgeving" scheidt.
+   * Alles fijner dan deze straal blijft onaangeroerd staan.
+   */
+  greenhouseFineRadius: number;
+  /**
+   * Hoeveel van de middenband (fijn..laag) blijft staan. Dat is de schaal
+   * waarop gespiegeld bladerdek zit; op 1 gedraagt de stap zich als voorheen.
+   */
+  greenhouseMidKeep: number;
 }
 
 export type PlateMode = "blur" | "replace" | "off";
@@ -638,7 +648,7 @@ export const defaultConfig: Config = {
       grain: false, // een verloop heeft geen korrel om mee te matchen
       lightWrap: true,
       scaleMode: "frame",
-      frameWidthRatio: 0.72,
+      frameWidthRatio: 0.78, // hun auto vult het kader ruimer
     },
     white: {
       // 8:5, zoals de referenties in carredo-imaging-refs (1200x750)
@@ -833,7 +843,10 @@ export const defaultConfig: Config = {
       lightSoftness: 0.9,
       // hun spiegeling is gedetailleerd maar licht: minimum 102 net onder de
       // auto. De onze ging naar 66 — te sterk en, door de blur, te dof.
-      floorReflectivity: 0.07,
+      // 0,07 was te ver teruggedraaid: de spiegeling verdween. Hun spiegeling
+      // is LICHT maar GEDETAILLEERD — je ziet de velgspaken. Sturen op het
+      // minimum was de verkeerde maat; het gaat om zichtbaar detail.
+      floorReflectivity: 0.2,
       reflectionHeightRatio: 0.5,
       glowStrength: 0, // de sweep heeft zijn lichtpoel al ingebakken
       vignetteStrength: 0,
@@ -1038,14 +1051,21 @@ export const defaultConfig: Config = {
   },
   WINDOWS: {
     enabled: true,
-    detectPrompts: ["car window", "windshield"],
+    // "car window" en varianten leveren bij deze detector de héle auto terug
+    // (gemeten: 1387×469 op een auto van 1387×469), waarna de plausibiliteits-
+    // filter ze terecht weggooit en alleen de voorruit overblijft. De achterste
+    // zijruit werd daardoor nooit voorgesteld en bleef vol bomen staan.
+    // Deze formulering geeft wél een greenhouse-band (gemeten: 742×145).
+    detectPrompts: ["all glass windows of the car", "windshield"],
     segmentModelId: "fal-ai/sam2/image",
     tintOpacity: 0.68,
     tintColor: { r: 35, g: 40, b: 48 },
     featherSigma: 5,
     greenhouse: true,
-    greenhouseDetail: 1,
+    greenhouseDetail: 0.35,
     greenhouseLowFreqRadius: 12,
+    greenhouseFineRadius: 2,
+    greenhouseMidKeep: 0.25,
   },
   /**
    * SCHATTING — de prijs per BiRefNet-call staat niet in de publieke docs.

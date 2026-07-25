@@ -117,6 +117,8 @@ export function applyGreenhouse(
   plate: GreenhouseColour,
   cfg: Pick<WindowsConfig, "tintOpacity" | "tintColor">,
   detailKeep: number,
+  fineFreq: Uint8Array | null = null,
+  midKeep = 1,
 ): number {
   let changed = 0;
   // waar de plate op landt: de reflectiekleur verdonkerd richting de tint,
@@ -138,7 +140,25 @@ export function applyGreenhouse(
     // hoge frequentie = pixel min zijn eigen lokale gemiddelde. Dat is de
     // structuur: wisser, stijlen, interieurcontouren.
     const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-    const detail = (lum - (lowFreq[i] ?? 0)) * detailKeep;
+    let detail: number;
+    if (fineFreq) {
+      // Band-pass. Eén blur is te grof gereedschap: bladerdek in het glas zit
+      // op dezelfde schaal als de raamstijlen, dus "alles boven radius 12
+      // behouden" houdt de bomen vast en "minder behouden" wist de wisser mee.
+      //
+      //   fijn (lum − fijne blur)     randen: wisser, stijlen, afdichtrubbers.
+      //                               Dít is de auto, blijft volledig staan.
+      //   midden (fijn − grof)        vlekkerige modulatie op tientallen
+      //                               pixels: gespiegeld bladerdek. Weg ermee.
+      //
+      // Zo verdwijnt de omgeving uit het glas zonder dat er één rand van de
+      // auto zachter wordt — en zonder generatieve stap.
+      const fine = lum - (fineFreq[i] ?? 0);
+      const mid = (fineFreq[i] ?? 0) - (lowFreq[i] ?? 0);
+      detail = (fine + mid * midKeep) * detailKeep;
+    } else {
+      detail = (lum - (lowFreq[i] ?? 0)) * detailKeep;
+    }
 
     // nieuwe waarde = vervangen lage frequentie + behouden hoge frequentie,
     // gewogen met het maskerverloop zodat de raamrand niet hard afsnijdt

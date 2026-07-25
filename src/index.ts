@@ -766,10 +766,19 @@ async function processImage(
             .blur(cfg.WINDOWS.greenhouseLowFreqRadius)
             .raw()
             .toBuffer();
+          // fijne blur: de grens tussen "rand van de auto" en "gespiegelde
+          // omgeving". Alles fijner blijft, de band ertussen wordt gedempt.
+          const fineRaw = await sharp(data, { raw: { width, height, channels: 4 } })
+            .greyscale()
+            .blur(cfg.WINDOWS.greenhouseFineRadius)
+            .raw()
+            .toBuffer();
           windowInfo.tintedPixels = applyGreenhouse(
             data, alpha, windowMask,
             new Uint8Array(lowRaw.buffer, lowRaw.byteOffset, width * height),
             width, height, pm, cfg.WINDOWS, cfg.WINDOWS.greenhouseDetail,
+            new Uint8Array(fineRaw.buffer, fineRaw.byteOffset, width * height),
+            cfg.WINDOWS.greenhouseMidKeep,
           );
         } else {
           windowInfo.tintedPixels = applyWindowTint(
