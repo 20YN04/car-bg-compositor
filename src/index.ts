@@ -940,16 +940,30 @@ async function processImage(
         // gebruikt het volledige composiet + separaat fill-mask.
         const isGemini = cfg.GENBG.provider === "gemini";
         const isQwen = cfg.GENBG.provider === "qwen";
-        // beide instructie-editors kennen geen masker: geef ze het
-        // composiet met de auto zwart afgedekt, zodat ze hem niet kunnen zien
-        // en dus ook niet kunnen dupliceren
-        const maskedInput = isGemini || isQwen;
+        // Zwart afdekken werkt NIET bij instructie-editors: ze lezen het
+        // zwarte silhouet als inhoud. Gemini vulde het gat met een verzonnen
+        // auto, Qwen maakte er een zwart paneel van dat rechtop op de vloer
+        // stond. Beide gemeten op beeld (5) van de Taycan-set.
+        //
+        // Qwen krijgt daarom het composiet MET zichtbare auto plus de
+        // instructie die te behouden; de paste-back van de originele pixels
+        // blijft de garantie, niet de prompt. Gemini houdt voorlopig het
+        // maskerpad omdat dat pad zo geconfigureerd is.
+        const maskedInput = isGemini;
+        // keepShape heeft de afmeting van de AUTOLAAG, niet van het canvas.
+        // Hem naar fw×fh schalen rekte het silhouet uit tot bijna het hele
+        // frame en plaatste dat ook nog op de auto-offset: het model kreeg een
+        // reusachtig zwart blok in plaats van een autovormig gat, en vulde dat
+        // met een witte spookauto. Schalen met dezelfde mpScale als de rest.
+        const shapeMeta = await sharp(keepShape).metadata();
+        const shapeW = Math.max(1, Math.round((shapeMeta.width ?? 1) * mpScale));
+        const shapeH = Math.max(1, Math.round((shapeMeta.height ?? 1) * mpScale));
         const fillInput = maskedInput
           ? await sharp(mathComposite)
               .resize(fw, fh, { fit: "fill" })
               .composite([{
                 input: await sharp(keepShape)
-                  .resize(fw, fh, { fit: "fill" })
+                  .resize(shapeW, shapeH, { fit: "fill" })
                   .negate()
                   .png()
                   .toBuffer(),
@@ -995,7 +1009,7 @@ async function processImage(
               )
             : isQwen
             ? await generateSceneQwen(
-                fillInput, cfg.GEMINI.maskPrefix + cfg.GENBG.prompt, cfg.QWEN,
+                fillInput, cfg.QWEN.keepPrefix + cfg.GENBG.prompt, cfg.QWEN,
                 CACHE_DIR, cli.useCache, cfg.GENBG.seed + attempt,
               )
             : await fillScene(

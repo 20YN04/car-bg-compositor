@@ -342,6 +342,13 @@ export interface QwenConfig {
   guidanceScale: number;
   negativePrompt: string;
   costPerCall: number;
+  /**
+   * Instructie-prefix. Qwen krijgt het composiet MET zichtbare auto: zwart
+   * afdekken leest hij als een object en dan bouwt hij een studio rond een
+   * zwart paneel. De prompt vraagt hem de auto te laten staan; de garantie
+   * komt niet van die vraag maar van de paste-back erna.
+   */
+  keepPrefix: string;
 }
 
 export interface GenBgConfig {
@@ -800,6 +807,9 @@ export const defaultConfig: Config = {
       "second car, extra vehicle, people, text, watermark, podium, turntable, " +
       "floor markings, redrawn wheels, distorted badge",
     costPerCall: 0.02, // $0.02/MP, gepubliceerd tarief
+    keepPrefix:
+      "Keep the car in this image exactly as it is — do not change its shape, " +
+      "colour, wheels, badges or position. Replace only what is around it: ",
   },
   PRESETS: {
     side: { spanMeters: 4.3 },
