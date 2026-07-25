@@ -84,11 +84,12 @@ export function buildContactShadows(
   bbox: BBox,
   placement: Placement,
   cfg: Config,
+  shadowScale = 1,
 ): ShadowEllipse[] {
   return clusters.map((c) => {
     const centerX = (c.x0 + c.x1) / 2;
     const clusterWidth = (c.x1 - c.x0 + 1) * placement.scale;
-    const ry = cfg.SHADOW.height * 0.3;
+    const ry = cfg.SHADOW.height * 0.3 * shadowScale;
     return {
       cx: placement.x + (centerX - bbox.left) * placement.scale,
       // iets onder het contactpunt zodat de donkere poel zichtbaar blijft
@@ -121,7 +122,7 @@ async function silhouetteShadow(
   profile: BackgroundProfile,
 ): Promise<Buffer> {
   const s = cfg.SHADOW;
-  const shH = Math.max(24, Math.round(s.height));
+  const shH = Math.max(10, Math.round(s.height * profile.shadowHeightScale));
   const opacity = hasContacts ? s.opacity * 0.6 : s.opacity;
   const mask = await sharp(car)
     .ensureAlpha()
@@ -338,7 +339,7 @@ export async function compositeImage(
       contacts.length > 0, input.profile,
     ),
   )
-    .blur(cfg.SHADOW.blur * input.profile.lightSoftness)
+    .blur(cfg.SHADOW.blur * input.profile.lightSoftness * input.profile.shadowBlurScale)
     .png()
     .toBuffer();
 

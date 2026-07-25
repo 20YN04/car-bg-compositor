@@ -463,6 +463,17 @@ export interface BackgroundProfile {
    * ~0,45: links van het midden, met ruimte rechts voor plaat en badge.
    */
   horizontalBias: number;
+  /**
+   * Schaal op SHADOW.height en SHADOW.blur voor deze plate.
+   *
+   * Een brede zachte schaduwband legt zich óver de vloerreflectie heen en
+   * maakt van allebei grijze mush — dan zweeft de auto. Gemeten onder de band
+   * op de live listing: 58 (rubber) gaat direct naar 151 (heldere vloer), dus
+   * hun contactschaduw is een dunne lijn. Bij ons liep een donkere waas nog
+   * 20px door: 55 -> 92 -> 81 -> 74.
+   */
+  shadowHeightScale: number;
+  shadowBlurScale: number;
 }
 
 export interface BrandingConfig {
@@ -767,6 +778,8 @@ export const defaultConfig: Config = {
       toneBrightness: 0.94,
       toneWarmth: 0,
       horizontalBias: 0.5,
+      shadowHeightScale: 1,
+      shadowBlurScale: 1,
     },
     // gekalibreerd op de betonvloer-showroomplate (1536×1024 → cover 1920×1440).
     // horizonY opgemeten op de plate zelf: sterkste horizontale luminantierand
@@ -789,6 +802,8 @@ export const defaultConfig: Config = {
       toneBrightness: 0.96, // referentie is een tikje donkerder
       toneWarmth: 0.025, // en een tikje warmer grijs
       horizontalBias: 0.5,
+      shadowHeightScale: 1,
+      shadowBlurScale: 1,
     },
     /**
      * Cutout op puur wit — de canonieke referentie uit carredo-imaging-refs.
@@ -821,6 +836,10 @@ export const defaultConfig: Config = {
       toneBrightness: 1,
       toneWarmth: 0,
       horizontalBias: 0.5,
+      // strakke contactlijn i.p.v. een brede waas: die legt zich anders over
+      // de spiegeling heen en dan zweeft de auto
+      shadowHeightScale: 0.35,
+      shadowBlurScale: 0.3,
     },
     "white.png": {
       horizonY: null,
@@ -840,6 +859,8 @@ export const defaultConfig: Config = {
       // PROMPT.md schrijft 45% voor, maar de referentiebeelden zelf meten
       // allebei 50%. De beelden zijn de benchmark, niet het document.
       horizontalBias: 0.5,
+      shadowHeightScale: 1,
+      shadowBlurScale: 1,
     },
   },
   // neutrale gradient: geen perspectief, dus de klassieke plaatsing
@@ -859,6 +880,8 @@ export const defaultConfig: Config = {
     toneBrightness: 1,
     toneWarmth: 0,
     horizontalBias: 0.5,
+    shadowHeightScale: 1,
+    shadowBlurScale: 1,
   },
   ROUTING: {
     enabled: true,

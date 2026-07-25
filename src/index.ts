@@ -909,7 +909,7 @@ async function processImage(
       {
         rgba: data, width, height, bbox: analysis.bbox, placement, backgroundPath,
         contactShadows: buildContactShadows(
-          shadowClusters, analysis.bbox, placement, cfg,
+          shadowClusters, analysis.bbox, placement, cfg, profile.shadowHeightScale,
         ),
         profile,
         contactY: contactYUsed,
