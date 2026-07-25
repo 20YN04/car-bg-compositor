@@ -609,11 +609,13 @@ export const defaultConfig: Config = {
   // gemeten op images.carredo.be, Taycan-listing beeld 03 (1248x832)
   SWEEP: {
     horizonRatio: 0.55,
-    wallCentre: 172,
-    wallEdge: 98,
-    floorCentre: 205,
-    floorEdge: 100,
-    floorPoolRatio: 0.88,
+    wallCentre: 176,
+    wallEdge: 88,
+    floorCentre: 236,
+    floorEdge: 84,
+    floorPoolRatio: 0.9,
+    wallVerticalFalloff: 14,
+    floorRadius: 0.72,
   },
   TARGETS: {
     showroom: {
@@ -829,8 +831,10 @@ export const defaultConfig: Config = {
       carWidthMeters: 4.4,
       lightDirX: 0,
       lightSoftness: 0.9,
-      floorReflectivity: 0.34,
-      reflectionHeightRatio: 0.45,
+      // hun spiegeling is gedetailleerd maar licht: minimum 102 net onder de
+      // auto. De onze ging naar 66 — te sterk en, door de blur, te dof.
+      floorReflectivity: 0.07,
+      reflectionHeightRatio: 0.5,
       glowStrength: 0, // de sweep heeft zijn lichtpoel al ingebakken
       vignetteStrength: 0,
       toneBrightness: 1,
@@ -899,7 +903,7 @@ export const defaultConfig: Config = {
   },
   DOF: {
     enabled: true,
-    reflectionNearBlur: 1.5,
+    reflectionNearBlur: 0.7,
     reflectionFarBlur: 7,
   },
   LIGHTWRAP: {

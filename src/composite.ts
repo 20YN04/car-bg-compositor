@@ -721,6 +721,13 @@ export interface SweepParams {
   floorCentre: number; // luminantie van de lichtpoel op de vloer
   floorEdge: number;
   floorPoolRatio: number; // y van het midden van de vloerpoel
+  /** Hoeveel donkerder de wand bovenaan is dan bij de horizon. Gemeten: ~12. */
+  wallVerticalFalloff: number;
+  /**
+   * Straal van de vloerpoel. Smaller dan de wand: op de vloer valt het licht
+   * wél af naar de zijkanten (106 aan de rand tegen 204 in het midden).
+   */
+  floorRadius: number;
 }
 
 /**
@@ -747,21 +754,31 @@ export async function generateStudioSweep(
     const c = Math.max(0, Math.min(255, Math.round(v)));
     return `#${c.toString(16).padStart(2, "0").repeat(3)}`;
   };
-  // twee elliptische verlopen, gescheiden door de horizon. De wandpoel zit óp
-  // de horizon zodat het licht achter de auto vandaan lijkt te komen.
+  // De wand is GEEN radiale poel. Gemeten op de live listing valt hij
+  // verticaal nauwelijks af (176 bij de horizon naar 164 bovenaan) maar
+  // horizontaal sterk (164 in het midden naar 102 in de hoek). Een radiale
+  // poel gaf boven-midden 97 — even donker als de hoek. Dus: een milde
+  // verticale gradient met daaroverheen een horizontale vignettering.
   const svg = Buffer.from(
     `<svg width="${canvas.width}" height="${canvas.height}" xmlns="http://www.w3.org/2000/svg">` +
       `<defs>` +
-      `<radialGradient id="wall" cx="50%" cy="100%" r="85%">` +
-      `<stop offset="0" stop-color="${hex(p.wallCentre)}"/>` +
-      `<stop offset="1" stop-color="${hex(p.wallEdge)}"/>` +
-      `</radialGradient>` +
-      `<radialGradient id="floor" cx="50%" cy="${((pool - horizon) / (canvas.height - horizon)) * 100}%" r="90%">` +
+      `<linearGradient id="wallV" x1="0" y1="0" x2="0" y2="1">` +
+      `<stop offset="0" stop-color="${hex(p.wallCentre - p.wallVerticalFalloff)}"/>` +
+      `<stop offset="1" stop-color="${hex(p.wallCentre)}"/>` +
+      `</linearGradient>` +
+      `<linearGradient id="vign" x1="0" y1="0" x2="1" y2="0">` +
+      `<stop offset="0" stop-color="${hex(p.wallEdge)}" stop-opacity="1"/>` +
+      `<stop offset="0.42" stop-color="${hex(p.wallEdge)}" stop-opacity="0"/>` +
+      `<stop offset="0.58" stop-color="${hex(p.wallEdge)}" stop-opacity="0"/>` +
+      `<stop offset="1" stop-color="${hex(p.wallEdge)}" stop-opacity="1"/>` +
+      `</linearGradient>` +
+      `<radialGradient id="floor" cx="50%" cy="${((pool - horizon) / (canvas.height - horizon)) * 100}%" r="${p.floorRadius * 100}%">` +
       `<stop offset="0" stop-color="${hex(p.floorCentre)}"/>` +
       `<stop offset="1" stop-color="${hex(p.floorEdge)}"/>` +
       `</radialGradient>` +
       `</defs>` +
-      `<rect width="${canvas.width}" height="${horizon}" fill="url(#wall)"/>` +
+      `<rect width="${canvas.width}" height="${horizon}" fill="url(#wallV)"/>` +
+      `<rect width="${canvas.width}" height="${horizon}" fill="url(#vign)"/>` +
       `<rect y="${horizon}" width="${canvas.width}" height="${canvas.height - horizon}" fill="url(#floor)"/>` +
       `</svg>`,
   );
