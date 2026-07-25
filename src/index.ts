@@ -73,7 +73,11 @@ import {
   type ChannelMeans,
 } from "./harmonize.js";
 import { applyBranding } from "./branding.js";
-import { analyzePaint, dampEnvironmentReflections } from "./paint.js";
+import {
+  analyzePaint,
+  attenuateReflectionStructure,
+  dampEnvironmentReflections,
+} from "./paint.js";
 import { auditComposite, auditWarnings, type CompositeAudit } from "./audit.js";
 import { classifyExterior, runQA, type QAWarning } from "./qa.js";
 import { activeOperations, buildProvenance, provenanceXmp } from "./provenance.js";
@@ -695,10 +699,19 @@ async function processImage(
   // op de motorkap. Verzadiging naar neutraal, helderheid ongemoeid — de vorm
   // blijft, de kleur verdwijnt. Achterlichten en badges zijn beschermd.
   let paintDamped = 0;
+  let paintSmoothed = 0;
   if (cfg.PAINT.enabled && analysis.bbox) {
     const stats = analyzePaint(data, alpha, width, height, cfg.PAINT);
+    // het gewicht per pixel bewaren: de tweede stap mag alleen aankomen waar
+    // deze stap de pixel al als omgeving heeft aangewezen
+    const weights = new Float32Array(width * height);
     paintDamped = dampEnvironmentReflections(
-      data, alpha, width, height, stats, cfg.PAINT,
+      data, alpha, width, height, stats, cfg.PAINT, weights,
+    );
+    paintSmoothed = attenuateReflectionStructure(
+      data, alpha, weights, width, height,
+      cfg.PAINT.structureFineRadius, cfg.PAINT.structureCoarseRadius,
+      cfg.PAINT.structureStrength,
     );
   }
 

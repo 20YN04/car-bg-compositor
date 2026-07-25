@@ -261,6 +261,17 @@ export interface PaintConfig {
   /** Onder deze mediane verzadiging geldt de auto als zwart/wit/grijs. */
   achromaticSat: number;
   /**
+   * De vórm van de gespiegelde omgeving dempen, niet alleen de kleur. Een
+   * ontkleurd bladerdek op het dak leest nog steeds als "stond onder bomen".
+   * Werkt alleen waar de dempstap de pixel al als omgeving aanwees, dus vlakke
+   * lak blijft vlak — anders krijg je de plastic look terug.
+   */
+  structureStrength: number;
+  /** Fijner dan deze straal blijft staan: panelnaden, grepen, badges. */
+  structureFineRadius: number;
+  /** Grover dan deze straal blijft staan: de lichtverdeling over het paneel. */
+  structureCoarseRadius: number;
+  /**
    * Alleen gestructureerde reflecties dempen (bladerdek, hekwerk), niet een
    * egale kleurzweem. De vakregel uit de automotive retouche is expliciet:
    * ruim niet alle reflecties op, want dan leest de auto als geplakt — alleen
@@ -941,6 +952,9 @@ export const defaultConfig: Config = {
     selective: true,
     contrastRadius: 6,
     contrastFull: 6,
+    structureStrength: 0.8,
+    structureFineRadius: 2,
+    structureCoarseRadius: 24,
   },
   GRAIN: {
     enabled: true,

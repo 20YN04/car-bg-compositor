@@ -46,12 +46,34 @@ export function localContrastMap(
   radius: number,
 ): Float32Array {
   const n = width * height;
+  const lum = luminanceMap(rgba, n);
+  const blurred = boxBlur(lum, width, height, radius);
+  const contrast = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    if ((alpha[i] ?? 0) === 0) continue;
+    contrast[i] = Math.abs((lum[i] ?? 0) - (blurred[i] ?? 0));
+  }
+  return contrast;
+}
+
+/** Luminantie per pixel uit een RGBA-buffer. */
+export function luminanceMap(rgba: Buffer, n: number): Float32Array {
   const lum = new Float32Array(n);
   for (let i = 0; i < n; i++) {
     const p = i * 4;
     lum[i] = 0.2126 * (rgba[p] ?? 0) + 0.7152 * (rgba[p + 1] ?? 0) + 0.0722 * (rgba[p + 2] ?? 0);
   }
-  // gescheiden boxblur: horizontaal, dan verticaal — O(n) i.p.v. O(n·r²)
+  return lum;
+}
+
+/** Gescheiden boxblur: horizontaal, dan verticaal — O(n) i.p.v. O(n·r²). */
+export function boxBlur(
+  lum: Float32Array,
+  width: number,
+  height: number,
+  radius: number,
+): Float32Array {
+  const n = width * height;
   const tmp = new Float32Array(n);
   const blurred = new Float32Array(n);
   for (let y = 0; y < height; y++) {
@@ -101,12 +123,7 @@ export function localContrastMap(
       }
     }
   }
-  const contrast = new Float32Array(n);
-  for (let i = 0; i < n; i++) {
-    if ((alpha[i] ?? 0) === 0) continue;
-    contrast[i] = Math.abs((lum[i] ?? 0) - (blurred[i] ?? 0));
-  }
-  return contrast;
+  return blurred;
 }
 
 /** Kleinste hoek tussen twee tinten op de kleurencirkel (0–180). */
@@ -194,6 +211,7 @@ export function dampEnvironmentReflections(
   height: number,
   stats: PaintStats,
   cfg: PaintConfig,
+  weightsOut: Float32Array | null = null,
 ): number {
   if (!cfg.enabled || cfg.strength <= 0) return 0;
   // selectief, niet uniform: alleen gestructureerde reflecties dempen. Een
@@ -230,6 +248,7 @@ export function dampEnvironmentReflections(
       : 1;
     const amount = cfg.strength * w * ramp * structure;
     if (amount <= 0) continue;
+    if (weightsOut) weightsOut[i] = amount;
 
     // naar de luminantie trekken, niet naar het maximumkanaal: dat laatste
     // maakt de pixel lichter (groen 30/55/25 zou 55/55/55 worden). Naar L
@@ -240,6 +259,67 @@ export function dampEnvironmentReflections(
     rgba[p] = Math.round(r + (lum - r) * amount);
     rgba[p + 1] = Math.round(g + (lum - g) * amount);
     rgba[p + 2] = Math.round(b + (lum - b) * amount);
+    touched++;
+  }
+  return touched;
+}
+
+/**
+ * De vórm van een gespiegelde omgeving uit de lak halen.
+ *
+ * `dampEnvironmentReflections` trekt de kleur eruit maar laat de helderheids-
+ * structuur bewust staan; dat is daar de bovengrens. Op een dak of motorkap
+ * blijft daarmee een ontkleurd bladerdek liggen: een vlekkerige modulatie die
+ * nog steeds als "deze auto stond onder bomen" leest, hoe neutraal hij ook is.
+ *
+ * Wat we hier weghalen is de middenband — het verschil tussen een fijne en een
+ * grove blur. Dat is de schaal van gespiegeld gebladerte. Wat blijft:
+ *
+ *   fijner dan fineRadius   panelnaden, deurgrepen, badges, de rand van een
+ *                           spiegelkap. De identiteit van de auto.
+ *   grover dan coarseRadius de lichtverdeling over het carrosseriepaneel: waar
+ *                           het dak licht vangt en waar het wegdraait. De vorm
+ *                           van de auto zelf.
+ *
+ * Twee gates, want vlakke lak gladstrijken geeft precies de plastic look die we
+ * proberen te vermijden:
+ *
+ *   weights   alleen waar de dempstap de pixel al als omgeving heeft
+ *             aangewezen. Waar niets gedempt is, gebeurt hier niets.
+ *   strength  hoeveel van die middenband verdwijnt.
+ *
+ * Retourneert het aantal aangepaste pixels.
+ */
+export function attenuateReflectionStructure(
+  rgba: Buffer,
+  alpha: Uint8Array,
+  weights: Float32Array,
+  width: number,
+  height: number,
+  fineRadius: number,
+  coarseRadius: number,
+  strength: number,
+): number {
+  if (strength <= 0) return 0;
+  const n = width * height;
+  const lum = luminanceMap(rgba, n);
+  const fine = boxBlur(lum, width, height, fineRadius);
+  const coarse = boxBlur(lum, width, height, coarseRadius);
+  let touched = 0;
+  for (let i = 0; i < n; i++) {
+    if ((alpha[i] ?? 0) === 0) continue;
+    const w = weights[i] ?? 0;
+    if (w <= 0) continue;
+    const mid = (fine[i] ?? 0) - (coarse[i] ?? 0);
+    const delta = -strength * w * mid;
+    if (delta === 0) continue;
+    const p = i * 4;
+    // dezelfde delta op alle drie de kanalen: de pixels die hier langskomen
+    // zijn door de dempstap al vrijwel neutraal, dus dit verschuift de
+    // helderheid zonder een kleurzweem te introduceren
+    rgba[p] = Math.max(0, Math.min(255, Math.round((rgba[p] ?? 0) + delta)));
+    rgba[p + 1] = Math.max(0, Math.min(255, Math.round((rgba[p + 1] ?? 0) + delta)));
+    rgba[p + 2] = Math.max(0, Math.min(255, Math.round((rgba[p + 2] ?? 0) + delta)));
     touched++;
   }
   return touched;

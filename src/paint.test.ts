@@ -3,6 +3,7 @@ import { defaultConfig } from "./config.js";
 import {
   analyzePaint,
   dampEnvironmentReflections,
+  attenuateReflectionStructure,
   hueDistance,
   localContrastMap,
 } from "./paint.js";
@@ -199,5 +200,83 @@ describe("selectieve demping", () => {
     });
     // uniform raakt minstens zoveel pixels als selectief
     expect(nUni).toBeGreaterThanOrEqual(nSel);
+  });
+});
+
+describe("attenuateReflectionStructure", () => {
+  // ruim genoeg zodat de meetpunten verder dan coarseRadius van de rand liggen:
+  // daar knijpt het blurvenster scheef en meet je randeffect i.p.v. gedrag
+  const W = 256;
+  const H = 24;
+  const SEAM = 128;
+
+  /**
+   * Een lakpaneel met drie schalen tegelijk, zoals echte lak ze draagt:
+   *   breed verloop  de lichtverdeling over het paneel — de vorm van de auto
+   *   golf van 32px  gespiegeld bladerdek — dit moet weg
+   *   naad van 1px   een panelnaad — dit is de auto en moet blijven
+   */
+  function panel() {
+    const rgba = Buffer.alloc(W * H * 4);
+    const alpha = new Uint8Array(W * H).fill(255);
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const i = y * W + x;
+        const gradient = 40 + (x / W) * 80;
+        const foliage = 22 * Math.sin((x / 32) * 2 * Math.PI);
+        const seam = x === SEAM ? 70 : 0;
+        const v = Math.max(0, Math.min(255, Math.round(gradient + foliage + seam)));
+        rgba[i * 4] = v;
+        rgba[i * 4 + 1] = v;
+        rgba[i * 4 + 2] = v;
+        rgba[i * 4 + 3] = 255;
+      }
+    }
+    return { rgba, alpha };
+  }
+
+  const lum = (b: Buffer, x: number, y = 12) => b[(y * W + x) * 4]!;
+  const CFG = defaultConfig.PAINT;
+
+  function run(p: { rgba: Buffer; alpha: Uint8Array }, weight = 1) {
+    return attenuateReflectionStructure(
+      p.rgba, p.alpha, new Float32Array(W * H).fill(weight), W, H,
+      CFG.structureFineRadius, CFG.structureCoarseRadius, CFG.structureStrength,
+    );
+  }
+
+  it("haalt de vorm van het bladerdek uit de lak", () => {
+    const p = panel();
+    // piek en dal van de golf van 32px, ver van de naad en van de randen
+    const before = Math.abs(lum(p.rgba, 72) - lum(p.rgba, 88));
+    run(p);
+    const after = Math.abs(lum(p.rgba, 72) - lum(p.rgba, 88));
+    expect(before).toBeGreaterThan(30);
+    expect(after).toBeLessThan(0.35 * before);
+  });
+
+  it("laat de panelnaad staan", () => {
+    const p = panel();
+    run(p);
+    expect(lum(p.rgba, SEAM)).toBeGreaterThan(lum(p.rgba, SEAM - 3) + 50);
+  });
+
+  it("laat de lichtverdeling over het paneel staan", () => {
+    const p = panel();
+    // nuldoorgangen van de golf (veelvoud van 32), anders meet je de golf mee
+    // die deze stap juist hoort weg te halen. Tussen x=64 en x=192 loopt het
+    // verloop 40 niveaus op; dat hoort er onaangeroerd te staan.
+    const before = lum(p.rgba, 192) - lum(p.rgba, 64);
+    run(p);
+    const after = lum(p.rgba, 192) - lum(p.rgba, 64);
+    expect(before).toBeGreaterThan(38);
+    expect(after).toBeGreaterThan(before - 2);
+  });
+
+  it("raakt niets waar de dempstap geen omgeving aanwees", () => {
+    const p = panel();
+    const before = Buffer.from(p.rgba);
+    expect(run(p, 0)).toBe(0);
+    expect(p.rgba.equals(before)).toBe(true);
   });
 });
