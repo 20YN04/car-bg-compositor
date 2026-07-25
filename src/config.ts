@@ -64,11 +64,21 @@ export interface SegmentConfig {
    * tekstprompt (open-vocabulary concept segmentation, ICLR 2026). Eén call,
    * één model, plus per-masker scores waarop gefilterd kan worden.
    *
-   * NOG NIET GEVERIFIEERD tegen een echte respons — daarom niet de default.
-   * Zet 'm aan met --segment sam3 en controleer één beeld voordat je een
-   * batch draait; let vooral op de box-conventie (zie toAbsoluteBox).
+   * Per taak instelbaar, want de afweging verschilt per taak. Gemeten tarieven:
+   *
+   *   ruiten  florence-sam2 kost 2 detects + 1 segment = $0,004; SAM 3 $0,005.
+   *           Voor $0,001 extra. En het is geen luxe: Florence geeft op elke
+   *           raamprompt de héle auto terug, waarna SAM 2 binnen die ene box
+   *           één raam segmenteert. De achterste zijruit bleef zo vol bomen
+   *           staan (26.085 px glas tegen 68.210 met SAM 3).
+   *
+   *   wielen  florence-sam2 kost 1 detect = $0,001; SAM 3 $0,005. Vier keer
+   *           zo duur, en de contactplaatsing is op de Florence-route
+   *           gekalibreerd. Geen aangetoonde winst, dus niet omzetten.
+   *
+   * --segment zet beide om, voor het vergelijken van de twee routes.
    */
-  provider: SegmentProvider;
+  providers: { windows: SegmentProvider; wheels: SegmentProvider };
   modelId: string; // fal-ai/sam-3/image
   costPerCall: number; // $0.005, gepubliceerd tarief (niet geschat)
   maxMasks: number;
@@ -755,7 +765,7 @@ export const defaultConfig: Config = {
     boxMargin: 0.02,
   },
   SEGMENT: {
-    provider: "florence-sam2",
+    providers: { windows: "sam3", wheels: "florence-sam2" },
     modelId: "fal-ai/sam-3/image",
     costPerCall: 0.005,
     maxMasks: 8, // ruiten: voorruit + zijruiten + achterruit halen dit makkelijk

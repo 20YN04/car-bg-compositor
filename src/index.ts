@@ -25,7 +25,7 @@ import {
   scaleFromWheel,
   type Placement,
 } from "./composite.js";
-import { defaultConfig, type Config } from "./config.js";
+import { defaultConfig, type Config, type SegmentProvider } from "./config.js";
 import {
   aiStats,
   detectPlates,
@@ -211,7 +211,8 @@ function parseCli(): { cfg: Config; cli: CliOptions } {
     if (!["florence-sam2", "sam3"].includes(values.segment)) {
       throw new Error("--segment moet florence-sam2 of sam3 zijn");
     }
-    cfg.SEGMENT.provider = values.segment as Config["SEGMENT"]["provider"];
+    const v = values.segment as SegmentProvider;
+    cfg.SEGMENT.providers = { windows: v, wheels: v };
   }
   if (values["rembg-model"] !== undefined) {
     cfg.MATTE.rembgModel = values["rembg-model"];
@@ -579,7 +580,7 @@ async function processImage(
   if (cli.ai && analysis.bbox && compositeThisImage) {
     try {
       const rawWheels =
-        cfg.SEGMENT.provider === "sam3"
+        cfg.SEGMENT.providers.wheels === "sam3"
           ? (
               await segmentByText(
                 inputBytes, cfg.SEGMENT.prompts.wheels, CACHE_DIR, cfg.SEGMENT, cli.useCache,
@@ -741,7 +742,7 @@ async function processImage(
       // SAM 3 doet detectie én segmentatie in één call uit dezelfde
       // tekstprompt; de tweetraps-route blijft de default tot dat pad tegen
       // een echte respons geverifieerd is
-      const useSam3 = cfg.SEGMENT.provider === "sam3";
+      const useSam3 = cfg.SEGMENT.providers.windows === "sam3";
       const sam3Windows = useSam3
         ? await segmentByText(
             inputBytes, cfg.SEGMENT.prompts.windows, CACHE_DIR, cfg.SEGMENT, cli.useCache,
@@ -1516,9 +1517,13 @@ function printSummary(results: ImageResult[], cfg: Config): void {
         ? "Qwen Edit"
         : "FLUX Fill";
   console.log(`${sceneLabel}:   ${aiStats.fillCalls} FLUX + ${geminiStats.calls} Gemini + ${qwenStats.calls} Qwen calls, ${aiStats.fillCacheHits + geminiStats.cacheHits + qwenStats.cacheHits} cache-hits (scène)`);
-  if (cfg.SEGMENT.provider === "sam3") {
+  const sam3For = (["windows", "wheels"] as const).filter(
+    (k) => cfg.SEGMENT.providers[k] === "sam3",
+  );
+  if (sam3For.length > 0) {
+    const wat = sam3For.map((k) => (k === "windows" ? "ruiten" : "wielen")).join(" + ");
     console.log(
-      `SAM 3:       ${sam3Stats.calls} calls, ${sam3Stats.cacheHits} cache-hits (ruiten + wielen)`,
+      `SAM 3:       ${sam3Stats.calls} calls, ${sam3Stats.cacheHits} cache-hits (${wat})`,
     );
   }
   console.log(`OCR:         ${aiStats.ocrCalls} calls, ${aiStats.ocrCacheHits} cache-hits (tekst-poort)`);
@@ -1561,20 +1566,24 @@ function printSummary(results: ImageResult[], cfg: Config): void {
     aiStats.ocrCalls * cfg.AI.costPerDetection +
     sam3Stats.calls * cfg.SEGMENT.costPerCall;
   // de lokale rembg-matte kost niets; alleen de fal-providers tellen mee
-  const sam3 = cfg.SEGMENT.provider === "sam3";
+  const sam3Wheels = cfg.SEGMENT.providers.wheels === "sam3";
+  const sam3Windows = cfg.SEGMENT.providers.windows === "sam3";
   const matteCost = cfg.MATTE.provider === "rembg" ? 0 : cfg.COST_PER_CALL_USD;
   const perImage =
     matteCost +
     (cfg.DETECT.enabled ? cfg.AI.costPerDetection : 0) +
     // plaat- + wieldetectie; met sam3 gaat de wielquery via SAM 3
     (cfg.AI.enabled
-      ? cfg.AI.costPerDetection + (sam3 ? cfg.SEGMENT.costPerCall : cfg.AI.costPerDetection)
+      ? cfg.AI.costPerDetection +
+        (sam3Wheels ? cfg.SEGMENT.costPerCall : cfg.AI.costPerDetection)
       : 0) +
     (cfg.AI.enabled && cfg.AI.qaChecks ? 2 * cfg.AI.costPerQuery : 0) +
     (cfg.WINDOWS.enabled
-      ? sam3
+      ? sam3Windows
         ? cfg.SEGMENT.costPerCall
-        : cfg.AI.costPerDetection + cfg.AI.costPerSegment
+        : // één detect per prompt, niet één in totaal
+          cfg.WINDOWS.detectPrompts.length * cfg.AI.costPerDetection +
+          cfg.AI.costPerSegment
       : 0) +
     (cfg.MATTE.enabled ? cfg.AI.costPerSegment : 0) +
     (cfg.PLATE.mode === "replace" ? cfg.AI.costPerSegment : 0) +

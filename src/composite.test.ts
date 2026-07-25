@@ -401,7 +401,7 @@ describe("sweepLuminance tegen de gemeten referentie", () => {
 
 describe("computeReflectionRect met een gebroken contactlijn", () => {
   const CANVAS = { width: 1248, height: 832 };
-  const PLACEMENT = { x: 100.4, y: 200.2, width: 900.7, height: 500.3 };
+  const PLACEMENT = { x: 100.4, y: 200.2, width: 900.7, height: 500.3, scale: 1.4, outOfCanvas: false };
 
   it("levert gehele getallen, ook als de reflectie de onderrand raakt", () => {
     // contactY komt uit de wielmeting en is zelden rond. Zolang de reflectie
