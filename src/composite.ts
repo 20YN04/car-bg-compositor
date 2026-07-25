@@ -670,3 +670,41 @@ export function scaleFromWheel(
   const targetPx = nominalWheelMeters * floorScaleRef;
   return targetPx / widest;
 }
+
+/**
+ * Contactlijn verdiepen zodat ook het verste wiel op de vloer landt.
+ *
+ * Bij een sterke 3/4-hoek staat het verre wiel door het perspectief van de
+ * bronopname fors hoger in beeld dan het nabije — op de Taycan-set liep dat op
+ * tot 300px. Met een vaste contactlijn belandt dat wiel boven de
+ * wand/vloerovergang van de plate: de auto staat dan met één wiel op de muur.
+ *
+ * De config loste dat op met een handmatig verdiepte contactTargetY (1195 in
+ * plaats van 1150) die voor élke hoek geldt, ook voor zijaanzichten die het
+ * niet nodig hebben. Dat is te meten in plaats van te gokken: we weten waar
+ * elk wielcontact na plaatsing landt en waar de horizon van de plate ligt.
+ *
+ * Retourneert de aangepaste contactlijn, of de originele als er niets hoeft.
+ */
+export function contactYForWheels(
+  clusters: ContactCluster[],
+  bbox: BBox,
+  contactY: number,
+  scale: number,
+  placementY: number,
+  horizonY: number | null,
+  margin: number,
+): number {
+  if (horizonY === null || clusters.length === 0) return contactY;
+  // hoogste (= verste) wielcontact na plaatsing
+  let highest = Infinity;
+  for (const c of clusters) {
+    const y = placementY + (c.y - bbox.top + 1) * scale;
+    if (y < highest) highest = y;
+  }
+  if (!Number.isFinite(highest)) return contactY;
+  const minimum = horizonY + margin;
+  if (highest >= minimum) return contactY;
+  // alles zakt mee met hetzelfde verschil, dus de auto blijft intact staan
+  return contactY + (minimum - highest);
+}

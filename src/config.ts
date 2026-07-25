@@ -129,6 +129,18 @@ export interface WindowsConfig {
   tintOpacity: number; // 0..1: hoe sterk richting tintColor
   tintColor: { r: number; g: number; b: number };
   featherSigma: number; // blur op de maskrand voor een zachte overgang
+  /**
+   * Greenhouse-vervanging i.p.v. alleen tinten: de lage frequentie van het
+   * glas (de gespiegelde omgeving) wordt vervangen door wat de studioplate
+   * daar zou spiegelen; de hoge frequentie (wisser, stijlen, interieur-
+   * contouren) blijft staan. Zonder dit blijven bomen door de voorruit
+   * schemeren, alleen donkerder.
+   */
+  greenhouse: boolean;
+  /** Hoeveel van de originele glasstructuur behouden blijft (0..1). */
+  greenhouseDetail: number;
+  /** Blurstraal voor de laagfrequentie-scheiding, in px. */
+  greenhouseLowFreqRadius: number;
 }
 
 export type PlateMode = "blur" | "replace" | "off";
@@ -249,6 +261,19 @@ export interface PaintConfig {
   contrastFull: number; // lokaal contrast waarbij de volle demping geldt
 }
 
+export interface ContactFitConfig {
+  /**
+   * Contactlijn per beeld verdiepen zodat ook het verste wiel onder de
+   * wand/vloerovergang van de plate landt. Bij een sterke 3/4-hoek staat dat
+   * wiel door het perspectief van de bronopname tot ~300px hoger; met een
+   * vaste contactlijn staat de auto dan met één wiel op de muur. De config
+   * loste dat op met een handmatig verdiepte waarde die voor élke hoek gold,
+   * ook voor zijaanzichten die het niet nodig hebben.
+   */
+  enabled: boolean;
+  horizonMargin: number; // px die het verste wiel onder de horizon moet blijven
+}
+
 export interface DofConfig {
   /**
    * Dieptescherpte benaderen. Twee dingen verraden een composiet: alles even
@@ -300,7 +325,24 @@ export interface HighlightConfig {
   strength: number; // 0..1
 }
 
-export type GenBgProvider = "flux" | "gemini";
+export type GenBgProvider = "flux" | "gemini" | "qwen";
+
+export interface QwenConfig {
+  /**
+   * fal-ai/qwen-image-edit. Instructie-editor zonder masker: de bescherming
+   * komt volledig van de paste-back van de originele autopixels.
+   *
+   * image_size accepteert landscape_4_3, dus de output komt in de
+   * canvasverhouding binnen — Gemini leverde 3:2 op een 4:3 canvas, waarna de
+   * cover-crop de gegenereerde vloerlijn wegschoof.
+   */
+  modelId: string;
+  imageSize: string;
+  steps: number;
+  guidanceScale: number;
+  negativePrompt: string;
+  costPerCall: number;
+}
 
 export interface GenBgConfig {
   /**
@@ -333,6 +375,13 @@ export interface GenBgConfig {
    * terug op de scène.
    */
   fillMaxMegapixels: number;
+  /**
+   * Zachtheid van de maskerrand (differential diffusion). Bij een binair
+   * masker moet het model precies op de grens van "behouden" naar "genereren"
+   * springen; met een gradiënt beslist het per pixel hoeveel er mag veranderen
+   * en zit de overgang in de generatie zelf i.p.v. in een light wrap achteraf.
+   */
+  maskFeather: number;
 }
 
 export interface GeminiConfig {
@@ -444,6 +493,7 @@ export interface Config {
   PLATE: PlateConfig;
   WINDOWS: WindowsConfig;
   BRANDING: BrandingConfig;
+  CONTACT_FIT: ContactFitConfig;
   DOF: DofConfig;
   LIGHTWRAP: LightWrapConfig;
   PAINT: PaintConfig;
@@ -451,7 +501,8 @@ export interface Config {
   HIGHLIGHTS: HighlightConfig; // specular-compressie op de autolaag
   FINISH: FinishConfig; // grade op het eindbeeld
   GENBG: GenBgConfig; // hybride generatieve scène rond de beschermde auto
-  GEMINI: GeminiConfig; // Google Gemini Nano Banana (image editing)
+  GEMINI: GeminiConfig;
+  QWEN: QwenConfig; // Google Gemini Nano Banana (image editing)
   BACKGROUND_PROFILES: Record<string, BackgroundProfile>; // key = bestandsnaam
   DEFAULT_PROFILE: BackgroundProfile;
   ROUTING: RoutingConfig;
@@ -642,6 +693,10 @@ export const defaultConfig: Config = {
     maxGain: 0.12,
     setConsistent: true,
   },
+  CONTACT_FIT: {
+    enabled: true,
+    horizonMargin: 30,
+  },
   DOF: {
     enabled: true,
     reflectionNearBlur: 1.5,
@@ -715,6 +770,7 @@ export const defaultConfig: Config = {
     seed: 20260724,
     maxAttempts: 3,
     fillMaxMegapixels: 1,
+    maskFeather: 6,
   },
   GEMINI: {
     // Gemini 3.1 Flash met image-generation: Nano Banana (image editing)
@@ -734,6 +790,17 @@ export const defaultConfig: Config = {
     aspectRatio: "4:3",
     imageSize: "2K",
   },
+  QWEN: {
+    modelId: "fal-ai/qwen-image-edit",
+    imageSize: "landscape_4_3",
+    steps: 30,
+    guidanceScale: 4,
+    // de faalmodus die we bij Gemini zagen expliciet uitsluiten
+    negativePrompt:
+      "second car, extra vehicle, people, text, watermark, podium, turntable, " +
+      "floor markings, redrawn wheels, distorted badge",
+    costPerCall: 0.02, // $0.02/MP, gepubliceerd tarief
+  },
   PRESETS: {
     side: { spanMeters: 4.3 },
     front34: { spanMeters: 4.6 },
@@ -746,6 +813,9 @@ export const defaultConfig: Config = {
     tintOpacity: 0.68,
     tintColor: { r: 35, g: 40, b: 48 },
     featherSigma: 5,
+    greenhouse: true,
+    greenhouseDetail: 1,
+    greenhouseLowFreqRadius: 12,
   },
   /**
    * SCHATTING — de prijs per BiRefNet-call staat niet in de publieke docs.

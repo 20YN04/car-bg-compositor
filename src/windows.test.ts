@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  applyGreenhouse,
   applyWindowTint,
   filterBoxesOnCar,
   filterPlausibleWindowBoxes,
@@ -84,5 +85,69 @@ describe("applyWindowTint", () => {
     const tinted = applyWindowTint(rgba, alpha, mask, 4, 4, cfg);
     expect(tinted).toBe(0);
     expect(rgba[5 * 4]).toBe(200);
+  });
+});
+
+describe("applyGreenhouse", () => {
+  const CFG = { tintOpacity: 0.68, tintColor: { r: 35, g: 40, b: 48 } };
+  const PLATE = { r: 210, g: 208, b: 205 };
+
+  /** n px glas: groene boomreflectie met een lichte streep als "wisser". */
+  function glass(n: number) {
+    const rgba = Buffer.alloc(n * 4);
+    const alpha = new Uint8Array(n).fill(255);
+    const mask = new Uint8Array(n).fill(255);
+    const lowFreq = new Uint8Array(n);
+    for (let i = 0; i < n; i++) {
+      const wiper = i === Math.floor(n / 2);
+      const [r, g, b] = wiper ? [150, 150, 150] : [40, 78, 34];
+      rgba[i * 4] = r;
+      rgba[i * 4 + 1] = g;
+      rgba[i * 4 + 2] = b;
+      rgba[i * 4 + 3] = 255;
+      // lage frequentie: de brede groene toon, zonder de wisser
+      lowFreq[i] = Math.round(0.2126 * 40 + 0.7152 * 78 + 0.0722 * 34);
+    }
+    return { rgba, alpha, mask, lowFreq };
+  }
+
+  it("haalt de groene omgevingsreflectie uit het glas", () => {
+    const n = 21;
+    const g = glass(n);
+    applyGreenhouse(g.rgba, g.alpha, g.mask, g.lowFreq, n, 1, PLATE, CFG, 1);
+    // een pixel buiten de wisser: geen groenoverschot meer
+    const p = 2 * 4;
+    const [r, gg, b] = [g.rgba[p]!, g.rgba[p + 1]!, g.rgba[p + 2]!];
+    expect(gg - Math.max(r, b)).toBeLessThan(6);
+  });
+
+  it("behoudt de glasstructuur: de wisser blijft lichter dan zijn omgeving", () => {
+    const n = 21;
+    const g = glass(n);
+    applyGreenhouse(g.rgba, g.alpha, g.mask, g.lowFreq, n, 1, PLATE, CFG, 1);
+    const mid = Math.floor(n / 2);
+    const lum = (i: number) =>
+      0.2126 * g.rgba[i * 4]! + 0.7152 * g.rgba[i * 4 + 1]! + 0.0722 * g.rgba[i * 4 + 2]!;
+    expect(lum(mid)).toBeGreaterThan(lum(mid - 3) + 20);
+  });
+
+  it("laat glas donker: het wordt geen lichte vlek", () => {
+    const n = 21;
+    const g = glass(n);
+    applyGreenhouse(g.rgba, g.alpha, g.mask, g.lowFreq, n, 1, PLATE, CFG, 1);
+    const p = 2 * 4;
+    // plate is 210 licht, maar met tintOpacity 0,68 hoort het glas donker te
+    // blijven — anders leest de ruit als een gat in de auto
+    expect(g.rgba[p]!).toBeLessThan(130);
+  });
+
+  it("raakt niets buiten het raammasker", () => {
+    const n = 21;
+    const g = glass(n);
+    g.mask.fill(0);
+    const before = Buffer.from(g.rgba);
+    const changed = applyGreenhouse(g.rgba, g.alpha, g.mask, g.lowFreq, n, 1, PLATE, CFG, 1);
+    expect(changed).toBe(0);
+    expect(g.rgba.equals(before)).toBe(true);
   });
 });

@@ -20,6 +20,7 @@ import {
   compositeImage,
   computePlacement,
   generateDefaultBackground,
+  contactYForWheels,
   scaleFromWheel,
   type Placement,
 } from "./composite.js";
@@ -37,7 +38,13 @@ import {
   visualYesNo,
 } from "./ai.js";
 import { geminiStats, generateScene } from "./gemini.js";
-import { applyWindowTint, filterBoxesOnCar, filterPlausibleWindowBoxes } from "./windows.js";
+import { generateSceneQwen, qwenStats } from "./qwen.js";
+import {
+  applyGreenhouse,
+  applyWindowTint,
+  filterBoxesOnCar,
+  filterPlausibleWindowBoxes,
+} from "./windows.js";
 import { getCarBox, getCutout, maskStats, noteFalFailure } from "./mask.js";
 import { fetchUnionMask, sam3Stats, segmentByText } from "./sam3.js";
 import { buildContactShadows, type CanvasRect } from "./composite.js";
@@ -165,8 +172,8 @@ function parseCli(): { cfg: Config; cli: CliOptions } {
     cfg.GENBG.enabled = true;
   }
   if (values["genbg-provider"] !== undefined) {
-    if (!["flux", "gemini"].includes(values["genbg-provider"])) {
-      throw new Error("--genbg-provider moet flux of gemini zijn");
+    if (!["flux", "gemini", "qwen"].includes(values["genbg-provider"])) {
+      throw new Error("--genbg-provider moet flux, gemini of qwen zijn");
     }
     cfg.GENBG.provider = values["genbg-provider"] as Config["GENBG"]["provider"];
   }
@@ -594,6 +601,7 @@ async function processImage(
   }
 
   let placement: Placement | null = null;
+  let contactYUsed = contactY;
   if (analysis.bbox && analysis.groundLine !== null) {
     placement = computePlacement(
       analysis.bbox,
@@ -602,6 +610,26 @@ async function processImage(
       contactY,
       widthRatio,
     );
+    // bij een sterke 3/4-hoek staat het verre wiel fors hoger in beeld en zou
+    // het boven de wand/vloerovergang van de plate landen: één wiel op de
+    // muur. De config verdiepte de contactlijn daarvoor handmatig voor élke
+    // hoek; nu wordt per beeld gemeten of het nodig is.
+    if (cfg.CONTACT_FIT.enabled) {
+      contactYUsed = contactYForWheels(
+        shadowClusters,
+        analysis.bbox,
+        contactY,
+        placement.scale,
+        placement.y,
+        profile.horizonY,
+        cfg.CONTACT_FIT.horizonMargin,
+      );
+      if (contactYUsed !== contactY) {
+        placement = computePlacement(
+          analysis.bbox, analysis.groundLine, cfg.CANVAS, contactYUsed, widthRatio,
+        );
+      }
+    }
   }
   // fase 3 — harmonisatie: buitenlicht-zweem subtiel richting de
   // achtergrondtoon trekken vóór de ruit-tint
@@ -673,11 +701,32 @@ async function processImage(
           .blur(cfg.WINDOWS.featherSigma)
           .raw()
           .toBuffer();
-        windowInfo.tintedPixels = applyWindowTint(
-          data, alpha,
-          new Uint8Array(maskRaw.buffer, maskRaw.byteOffset, width * height),
-          width, height, cfg.WINDOWS,
+        const windowMask = new Uint8Array(
+          maskRaw.buffer, maskRaw.byteOffset, width * height,
         );
+        if (cfg.WINDOWS.greenhouse) {
+          // wat zou de studioplate hier spiegelen? De gemiddelde plate-kleur
+          // is een goede benadering: de wand is een egaal verloop, dus een
+          // ruit die hem spiegelt ziet vrijwel één toon
+          const pm = await backgroundMeans(
+            backgroundPath, cfg.CANVAS.width, cfg.CANVAS.height,
+          );
+          // lage frequentie van de luminantie: alles wat we vervangen
+          const lowRaw = await sharp(data, { raw: { width, height, channels: 4 } })
+            .greyscale()
+            .blur(cfg.WINDOWS.greenhouseLowFreqRadius)
+            .raw()
+            .toBuffer();
+          windowInfo.tintedPixels = applyGreenhouse(
+            data, alpha, windowMask,
+            new Uint8Array(lowRaw.buffer, lowRaw.byteOffset, width * height),
+            width, height, pm, cfg.WINDOWS, cfg.WINDOWS.greenhouseDetail,
+          );
+        } else {
+          windowInfo.tintedPixels = applyWindowTint(
+            data, alpha, windowMask, width, height, cfg.WINDOWS,
+          );
+        }
       }
     } catch (err) {
       // tint is cosmetisch: een falende segmentatie mag het beeld niet blokkeren
@@ -814,7 +863,7 @@ async function processImage(
           shadowClusters, analysis.bbox, placement, cfg,
         ),
         profile,
-        contactY,
+        contactY: contactYUsed,
       },
       cfg,
     );
@@ -890,7 +939,12 @@ async function processImage(
         // het model de auto niet zien en dus ook niet dupliceren. FLUX
         // gebruikt het volledige composiet + separaat fill-mask.
         const isGemini = cfg.GENBG.provider === "gemini";
-        const fillInput = isGemini
+        const isQwen = cfg.GENBG.provider === "qwen";
+        // beide instructie-editors kennen geen masker: geef ze het
+        // composiet met de auto zwart afgedekt, zodat ze hem niet kunnen zien
+        // en dus ook niet kunnen dupliceren
+        const maskedInput = isGemini || isQwen;
+        const fillInput = maskedInput
           ? await sharp(mathComposite)
               .resize(fw, fh, { fit: "fill" })
               .composite([{
@@ -908,9 +962,15 @@ async function processImage(
               .resize(fw, fh, { fit: "fill" })
               .png()
               .toBuffer();
+        // Differential diffusion: een gradiënt-masker i.p.v. een binair. Bij een
+        // harde 0/255-grens moet het model precies op de maskerrand van
+        // "behouden" naar "genereren" springen en dat levert de mesrand op die
+        // we langs de auto zagen. Met een zachte band beslist het model per
+        // pixel hoeveel er mag veranderen en zit de overgang in de generatie
+        // zelf, niet in een light wrap achteraf.
         const fillMaskSmall = await sharp(fillMask)
           .resize(fw, fh, { fit: "fill" })
-          .threshold(128)
+          .blur(Math.max(0.3, cfg.GENBG.maskFeather))
           .png()
           .toBuffer();
 
@@ -931,6 +991,11 @@ async function processImage(
           const scene = isGemini
             ? await generateScene(
                 fillInput, cfg.GEMINI.maskPrefix + cfg.GENBG.prompt, cfg.GEMINI,
+                CACHE_DIR, cli.useCache, cfg.GENBG.seed + attempt,
+              )
+            : isQwen
+            ? await generateSceneQwen(
+                fillInput, cfg.GEMINI.maskPrefix + cfg.GENBG.prompt, cfg.QWEN,
                 CACHE_DIR, cli.useCache, cfg.GENBG.seed + attempt,
               )
             : await fillScene(
@@ -977,7 +1042,7 @@ async function processImage(
             w: placement.width, h: placement.height,
           };
           const reflRect = {
-            x: placement.x, y: contactY,
+            x: placement.x, y: contactYUsed,
             w: placement.width, h: placement.height * 0.6,
           };
           const carBoxes = (await detectCars(checkJpeg, CACHE_DIR, cfg.AI, cli.useCache))
@@ -1160,7 +1225,7 @@ async function processImage(
         exterior: classification.isExterior,
         exteriorScore: `${classification.score}/${classification.total}`,
         composited: compositeThisImage,
-        contactY,
+        contactY: contactYUsed,
         widthRatio: Number(widthRatio.toFixed(4)),
         wheelScale: wheelScale === null ? null : Number(wheelScale.toFixed(4)),
         wheelsMeasured: measuredWheels.length,
@@ -1206,8 +1271,13 @@ function printSummary(results: ImageResult[], cfg: Config): void {
   console.log(
     `SAM2-segm.:  ${aiStats.segmentCalls} calls, ${aiStats.segmentCacheHits} cache-hits (matte + ruiten)`,
   );
-  const sceneLabel = cfg.GENBG.provider === "gemini" ? "Gemini NB" : "FLUX Fill";
-  console.log(`${sceneLabel}:   ${aiStats.fillCalls} FLUX + ${geminiStats.calls} Gemini calls, ${aiStats.fillCacheHits + geminiStats.cacheHits} cache-hits (scène)`);
+  const sceneLabel =
+    cfg.GENBG.provider === "gemini"
+      ? "Gemini NB"
+      : cfg.GENBG.provider === "qwen"
+        ? "Qwen Edit"
+        : "FLUX Fill";
+  console.log(`${sceneLabel}:   ${aiStats.fillCalls} FLUX + ${geminiStats.calls} Gemini + ${qwenStats.calls} Qwen calls, ${aiStats.fillCacheHits + geminiStats.cacheHits + qwenStats.cacheHits} cache-hits (scène)`);
   if (cfg.SEGMENT.provider === "sam3") {
     console.log(
       `SAM 3:       ${sam3Stats.calls} calls, ${sam3Stats.cacheHits} cache-hits (ruiten + wielen)`,
@@ -1233,9 +1303,15 @@ function printSummary(results: ImageResult[], cfg: Config): void {
   }
 
   const genbgCostPerCall =
-    cfg.GENBG.provider === "gemini" ? cfg.GEMINI.costPerCall : cfg.GENBG.costPerCall;
+    cfg.GENBG.provider === "gemini"
+      ? cfg.GEMINI.costPerCall
+      : cfg.GENBG.provider === "qwen"
+        ? cfg.QWEN.costPerCall
+        : cfg.GENBG.costPerCall;
   const genbgCallCount = cfg.GENBG.provider === "gemini"
     ? geminiStats.calls
+    : cfg.GENBG.provider === "qwen"
+    ? qwenStats.calls
     : aiStats.fillCalls;
   const runCost =
     (cfg.MATTE.provider === "rembg" ? 0 : maskStats.apiCalls * cfg.COST_PER_CALL_USD) +

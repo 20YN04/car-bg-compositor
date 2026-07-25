@@ -10,6 +10,7 @@ import {
   compositeImage,
   computePlacement,
   computeReflectionRect,
+  contactYForWheels,
   generateDefaultBackground,
   mapRectToCanvas,
   scaleFromWheel,
@@ -279,5 +280,40 @@ describe("scaleFromWheel", () => {
     const zij = scaleFromWheel([{ x: 0, y: 0, w: 210, h: 210 }], NOMINAL, FLOOR)!;
     const voor = scaleFromWheel([{ x: 0, y: 0, w: 150, h: 150 }], NOMINAL, FLOOR)!;
     expect(210 * zij).toBeCloseTo(150 * voor, 3);
+  });
+});
+
+describe("contactYForWheels", () => {
+  const bbox: BBox = { left: 0, top: 0, right: 999, bottom: 499 };
+  const HORIZON = 879;
+  const CONTACT = 1195;
+
+  it("laat een zijaanzicht ongemoeid: beide wielen staan al onder de horizon", () => {
+    // twee contacten op vrijwel dezelfde hoogte, ruim onder de horizon
+    const clusters = [
+      { x0: 100, x1: 200, y: 495 },
+      { x0: 700, x1: 800, y: 497 },
+    ];
+    const y = contactYForWheels(clusters, bbox, CONTACT, 1, 700, HORIZON, 20);
+    expect(y).toBe(CONTACT);
+  });
+
+  it("verdiept de contactlijn wanneer het verre wiel boven de horizon zou landen", () => {
+    // verre wiel 300px hoger: precies het geval dat de config handmatig
+    // wegwerkte met een vaste diepere contactlijn
+    const clusters = [
+      { x0: 100, x1: 200, y: 495 },
+      { x0: 700, x1: 800, y: 195 },
+    ];
+    const y = contactYForWheels(clusters, bbox, CONTACT, 1, 700, HORIZON, 20);
+    expect(y).toBeGreaterThan(CONTACT);
+    // het verre wiel landt daarna exact op de marge onder de horizon
+    expect(700 + (195 - 0 + 1) * 1 + (y - CONTACT)).toBeCloseTo(HORIZON + 20, 5);
+  });
+
+  it("doet niets zonder horizon of zonder wielcontacten", () => {
+    const clusters = [{ x0: 100, x1: 200, y: 195 }];
+    expect(contactYForWheels(clusters, bbox, CONTACT, 1, 700, null, 20)).toBe(CONTACT);
+    expect(contactYForWheels([], bbox, CONTACT, 1, 700, HORIZON, 20)).toBe(CONTACT);
   });
 });
