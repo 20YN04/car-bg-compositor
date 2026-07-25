@@ -21,6 +21,7 @@ import {
   computePlacement,
   contactYForWheels,
   generateDefaultBackground,
+  decideLevel,
   generateStudioSweep,
   scaleFromWheel,
   type Placement,
@@ -458,11 +459,15 @@ async function processImage(
 
   const cutout = await getCutout(inputPath, CACHE_DIR, cfg.FAL, cfg.MATTE, cli.useCache);
 
-  const { data, info } = await sharp(cutout)
+  const cut = await sharp(cutout)
     .ensureAlpha()
     .raw()
     .toBuffer({ resolveWithObject: true });
-  const { width, height } = info;
+  // niet const: de rechtzet-stap hieronder draait de uitsnede en levert een
+  // groter doek terug, dus buffer en afmetingen kunnen nog wijzigen
+  let data = cut.data;
+  let width = cut.info.width;
+  let height = cut.info.height;
 
   let alpha: Uint8Array = new Uint8Array(width * height);
   for (let i = 0; i < alpha.length; i++) alpha[i] = data[i * 4 + 3] ?? 0;
@@ -544,11 +549,42 @@ async function processImage(
   }
   for (let i = 0; i < alpha.length; i++) data[i * 4 + 3] = alpha[i] ?? 0;
 
-  const analysis = analyzeAlpha(alpha, width, height, {
-    threshold: cfg.ALPHA_THRESHOLD,
-    groundPercentile: cfg.GROUND_PERCENTILE,
-    minBlobArea: cfg.QA.minBlobArea,
-  });
+  const analyse = () =>
+    analyzeAlpha(alpha, width, height, {
+      threshold: cfg.ALPHA_THRESHOLD,
+      groundPercentile: cfg.GROUND_PERCENTILE,
+      minBlobArea: cfg.QA.minBlobArea,
+    });
+  let analysis = analyse();
+
+  // De auto waterpas zetten voordat er iets geplaatst wordt. Een opname op een
+  // helling of met een gerolde camera heeft een schuine wiellijn; de vloer van
+  // de plate is waterpas. Zonder deze stap raakt één wiel de grond en hangt het
+  // andere in de lucht — gemeten 73 px op de profielfoto van de Taycan. Geen
+  // schaduw of reflectie herstelt dat.
+  //
+  // Roteren is een starre transformatie van de originele pixels: niets
+  // bijverzonnen, alleen anders neergezet.
+  let levelled = 0;
+  if (analysis.bbox) {
+    const decision = decideLevel(analysis.contactClusters, analysis.bbox, cfg.LEVEL);
+    if (decision.applied) {
+      const turned = await sharp(data, { raw: { width, height, channels: 4 } })
+        .rotate(decision.rotate, {
+          background: { r: 0, g: 0, b: 0, alpha: 0 },
+        })
+        .raw()
+        .toBuffer({ resolveWithObject: true });
+      data = turned.data;
+      width = turned.info.width;
+      height = turned.info.height;
+      alpha = new Uint8Array(width * height);
+      for (let i = 0; i < alpha.length; i++) alpha[i] = data[i * 4 + 3] ?? 0;
+      // opnieuw meten: bbox, grondlijn en wielcontacten liggen nu anders
+      analysis = analyse();
+      levelled = decision.rotate;
+    }
+  }
 
   // fase 1 — plaatsing op de gekalibreerde vloer van deze plate: contactlijn
   // op contactTargetY, schaal via px/meter i.p.v. vaste canvasfractie

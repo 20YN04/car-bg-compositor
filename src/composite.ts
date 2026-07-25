@@ -271,9 +271,17 @@ export async function compositeImage(
       [0, 0, 0],
     );
   }
-  // zachte gloed/hotspot achter de auto (screen) + lichte hoekvignette
+  // Zachte gloed/hotspot op de wand ACHTER de auto (screen) + hoekvignette.
+  //
+  // Afgeknipt op de horizon, want de ellips reikt tot contactY + 0,35x de
+  // autohoogte en lichtte dus de vloer óp precies waar de schaduw hoort te
+  // liggen. Gemeten op de betonplate: de vloer onder de auto stond op 158-195
+  // terwijl de vrije vloer op 100-130 lag — een lichtkrans in plaats van een
+  // schaduw. Niets leest zo sterk als geplakt als licht dat de verkeerde kant
+  // op werkt.
   const glowCx = placement.x + placement.width / 2;
   const glowCy = input.contactY - placement.height * 0.45;
+  const glowFloor = Math.min(p.horizonY ?? input.contactY, input.contactY);
   const atmosphere = Buffer.from(
     `<svg width="${canvas.width}" height="${canvas.height}" xmlns="http://www.w3.org/2000/svg">` +
       `<defs>` +
@@ -281,8 +289,13 @@ export async function compositeImage(
       `<stop offset="0%" stop-color="white" stop-opacity="${p.glowStrength}"/>` +
       `<stop offset="100%" stop-color="white" stop-opacity="0"/>` +
       `</radialGradient>` +
+      `<clipPath id="wall">` +
+      `<rect x="0" y="0" width="${canvas.width}" height="${Math.round(glowFloor)}"/>` +
+      `</clipPath>` +
       `</defs>` +
+      `<g clip-path="url(#wall)">` +
       `<ellipse cx="${glowCx}" cy="${glowCy}" rx="${placement.width * 0.85}" ry="${placement.height * 0.8}" fill="url(#glow)"/>` +
+      `</g>` +
       `</svg>`,
   );
   const vignette = Buffer.from(
@@ -716,6 +729,88 @@ export function contactYForWheels(
   if (highest >= minimum) return contactY;
   // alles zakt mee met hetzelfde verschil, dus de auto blijft intact staan
   return contactY + (minimum - highest);
+}
+
+export interface LevelConfig {
+  enabled: boolean;
+  /**
+   * Onder deze bbox-verhouding (breedte/hoogte) geldt de opname niet als
+   * profiel. Bij een 3/4-aanzicht staat het verre wiel door perspectief
+   * legitiem hoger in beeld; rechtzetten zou de auto daar juist scheef trekken.
+   */
+  minAspect: number;
+  /** Boven deze hoek gaat er iets anders mis dan een scheve opname. */
+  maxAngle: number;
+}
+
+export interface LevelDecision {
+  /** Graden waarover de uitsnede gedraaid moet worden (positief = met de klok). */
+  rotate: number;
+  applied: boolean;
+  reason: string;
+}
+
+/**
+ * Bepaalt of de auto rechtgezet moet worden, en over welke hoek.
+ *
+ * Waarom dit nodig is: een auto die op een helling of met een gerolde camera
+ * gefotografeerd is, heeft een schuine wiellijn. De vloer van de plate is
+ * waterpas. Zet je die twee samen, dan raakt één wiel de grond en hangt het
+ * andere in de lucht — gemeten op de Taycan-profielfoto 73 px. Geen schaduw of
+ * reflectie repareert dat; de auto leest gewoon als erop geplakt.
+ *
+ * Roteren is een starre transformatie van de originele pixels: er wordt niets
+ * bijverzonnen, alleen anders neergezet. Dat is precies wat een retoucheur doet.
+ *
+ * De poort is het lastige deel. Gemeten over de dertien bronfoto's:
+ *
+ *   profiel (aspect >= 2,9)   hoeken -3,8  0,7  -3,5  2,4 graden
+ *   3/4     (aspect <= 2,5)   hoeken 24,3  -26,3  -13,2  15,5  -10,3
+ *
+ * Bij een 3/4-aanzicht komt de hoogteverschil van het verre wiel uit
+ * perspectief en hóórt hij er te zijn. Beide voorwaarden moeten kloppen, want
+ * elk afzonderlijk laat een randgeval door.
+ */
+export function decideLevel(
+  clusters: ContactCluster[],
+  bbox: BBox,
+  cfg: LevelConfig,
+): LevelDecision {
+  if (!cfg.enabled) return { rotate: 0, applied: false, reason: "uit" };
+  if (clusters.length < 2) {
+    return { rotate: 0, applied: false, reason: "minder dan twee wielcontacten" };
+  }
+  // de buitenste twee: die geven de langste basis en dus de kleinste
+  // hoekfout per pixel meetruis
+  let left = clusters[0]!;
+  let right = clusters[0]!;
+  for (const c of clusters) {
+    const cx = (c.x0 + c.x1) / 2;
+    if (cx < (left.x0 + left.x1) / 2) left = c;
+    if (cx > (right.x0 + right.x1) / 2) right = c;
+  }
+  const dx = (right.x0 + right.x1) / 2 - (left.x0 + left.x1) / 2;
+  if (dx <= 0) return { rotate: 0, applied: false, reason: "geen wielbasis" };
+  const angle = (Math.atan2(right.y - left.y, dx) * 180) / Math.PI;
+
+  const aspect = (bbox.right - bbox.left + 1) / (bbox.bottom - bbox.top + 1);
+  if (aspect < cfg.minAspect) {
+    return {
+      rotate: 0,
+      applied: false,
+      reason: `geen profiel (aspect ${aspect.toFixed(2)} < ${cfg.minAspect})`,
+    };
+  }
+  if (Math.abs(angle) > cfg.maxAngle) {
+    return {
+      rotate: 0,
+      applied: false,
+      reason: `hoek ${angle.toFixed(1)} graden boven het maximum ${cfg.maxAngle}`,
+    };
+  }
+  // de wiellijn loopt omlaag naar rechts bij een positieve hoek; tegengesteld
+  // draaien brengt hem waterpas
+  return { rotate: -angle, applied: angle !== 0, reason: `wiellijn ${angle.toFixed(1)} graden` };
 }
 
 export interface SweepParams {

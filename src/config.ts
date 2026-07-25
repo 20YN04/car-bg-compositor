@@ -516,7 +516,7 @@ export interface BrandingConfig {
   margin: number; // afstand tot de rechterbenedenhoek
 }
 
-import type { SweepParams } from "./composite.js";
+import type { LevelConfig, SweepParams } from "./composite.js";
 
 export type OutputTarget = "showroom" | "white" | "studio";
 
@@ -617,6 +617,7 @@ export interface Config {
   WINDOWS: WindowsConfig;
   BRANDING: BrandingConfig;
   CONTACT_FIT: ContactFitConfig;
+  LEVEL: LevelConfig;
   DOF: DofConfig;
   LIGHTWRAP: LightWrapConfig;
   PAINT: PaintConfig;
@@ -959,6 +960,14 @@ export const defaultConfig: Config = {
     strength: 0.35,
     maxGain: 0.12,
     setConsistent: true,
+  },
+  // Gemeten over de dertien Taycan-bronfoto's: profielopnames (aspect >= 2,9)
+  // hebben hoeken van -3,8 tot 2,4 graden, 3/4-aanzichten -26,3 tot 24,3. De
+  // eerste groep is scheefstand, de tweede perspectief.
+  LEVEL: {
+    enabled: true,
+    minAspect: 2.85,
+    maxAngle: 6,
   },
   CONTACT_FIT: {
     enabled: true,

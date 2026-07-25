@@ -10,6 +10,7 @@ import {
   compositeImage,
   computePlacement,
   computeReflectionRect,
+  decideLevel,
   contactYForWheels,
   generateDefaultBackground,
   mapRectToCanvas,
@@ -419,5 +420,62 @@ describe("computeReflectionRect met een gebroken contactlijn", () => {
     const r = computeReflectionRect(PLACEMENT, 649.68, CANVAS, 0.5)!;
     expect(r.top + r.height).toBeLessThanOrEqual(CANVAS.height);
     expect(r.left + r.width).toBeLessThanOrEqual(CANVAS.width);
+  });
+});
+
+/**
+ * Gemeten op de dertien Taycan-bronfoto's. De poort moet scheefstand van
+ * perspectief scheiden, en dat is het hele punt: bij een 3/4-aanzicht hóórt
+ * het verre wiel hoger in beeld te staan.
+ */
+describe("decideLevel", () => {
+  const CFG = defaultConfig.LEVEL;
+  const bbox = (w: number, h: number): BBox => ({
+    left: 0, top: 0, right: w - 1, bottom: h - 1,
+  });
+  // wielbasis van 827 px, zoals gemeten op beeld (8)
+  const wielen = (dy: number) => [
+    { x0: 337, x1: 585, y: 853 },
+    { x0: 1194, x1: 1382, y: 853 + dy },
+  ];
+
+  it("zet een scheve profielopname recht", () => {
+    // beeld (8): achterwiel 51 px hoger, bbox-aspect 2,96
+    const d = decideLevel(wielen(-51), bbox(1420, 480), CFG);
+    expect(d.applied).toBe(true);
+    // wiellijn loopt omhoog naar rechts, dus tegen de klok in gemeten hoek;
+    // de correctie draait met de klok mee
+    expect(d.rotate).toBeCloseTo(3.53, 1);
+  });
+
+  it("laat een 3/4-aanzicht met stok en al staan", () => {
+    // beeld (5): 24,3 graden, bbox-aspect 2,04 — beide poorten dicht
+    const d = decideLevel(wielen(373), bbox(980, 480), CFG);
+    expect(d.applied).toBe(false);
+    expect(d.reason).toContain("aspect");
+  });
+
+  it("weigert ook een profielopname met een onmogelijke hoek", () => {
+    // aspect in orde, maar 20 graden is geen scheve opname meer
+    const d = decideLevel(wielen(301), bbox(1420, 480), CFG);
+    expect(d.applied).toBe(false);
+    expect(d.reason).toContain("maximum");
+  });
+
+  it("doet niets bij één wielcontact", () => {
+    const d = decideLevel([{ x0: 337, x1: 585, y: 853 }], bbox(1420, 480), CFG);
+    expect(d.applied).toBe(false);
+  });
+
+  it("meet over de buitenste twee contacten, niet over de eerste twee", () => {
+    // drie clusters, waarvan de eerste twee dicht bij elkaar: over die korte
+    // basis is dezelfde pixelmeetfout een veel grotere hoek
+    const drie = [
+      { x0: 337, x1: 585, y: 853 },
+      { x0: 600, x1: 700, y: 851 },
+      { x0: 1194, x1: 1382, y: 802 },
+    ];
+    const d = decideLevel(drie, bbox(1420, 480), CFG);
+    expect(d.rotate).toBeCloseTo(3.53, 1);
   });
 });
