@@ -240,6 +240,19 @@ export interface PaintConfig {
   achromaticSat: number;
 }
 
+export interface LightWrapConfig {
+  /**
+   * Het licht van de scene een paar pixels de auto in laten bloeden. In een
+   * echte opname verlicht de omgeving het onderwerp ook langs de rand; een
+   * alfacomposiet mist dat en houdt een mesrand over. Gemeten op de daklijn
+   * van de Taycan-set: 152 -> 31 in twee pixels, zonder tussenwaarde.
+   */
+  enabled: boolean;
+  width: number; // breedte van de randband in px (blurradius op het alfa)
+  blur: number; // hoe sterk de achtergrond vervaagt voor hij bloedt
+  strength: number; // 0..1
+}
+
 export interface GrainConfig {
   /**
    * Korrel van de scene gelijktrekken met die van de auto. De auto draagt
@@ -409,6 +422,7 @@ export interface Config {
   PLATE: PlateConfig;
   WINDOWS: WindowsConfig;
   BRANDING: BrandingConfig;
+  LIGHTWRAP: LightWrapConfig;
   PAINT: PaintConfig;
   GRAIN: GrainConfig;
   HIGHLIGHTS: HighlightConfig; // specular-compressie op de autolaag
@@ -604,6 +618,12 @@ export const defaultConfig: Config = {
     strength: 0.35,
     maxGain: 0.12,
     setConsistent: true,
+  },
+  LIGHTWRAP: {
+    enabled: true,
+    width: 6,
+    blur: 24,
+    strength: 0.35,
   },
   PAINT: {
     enabled: true,

@@ -121,6 +121,7 @@ function parseCli(): { cfg: Config; cli: CliOptions } {
       "no-windows": { type: "boolean", default: false },
       "no-harmonize": { type: "boolean", default: false },
       "no-paint": { type: "boolean", default: false },
+      "no-lightwrap": { type: "boolean", default: false },
       "no-genbg": { type: "boolean", default: false },
       genbg: { type: "string" },
       "genbg-provider": { type: "string" },
@@ -152,6 +153,7 @@ function parseCli(): { cfg: Config; cli: CliOptions } {
   if (values["no-windows"]) cfg.WINDOWS.enabled = false;
   if (values["no-harmonize"]) cfg.HARMONIZE.enabled = false;
   if (values["no-paint"]) cfg.PAINT.enabled = false;
+  if (values["no-lightwrap"]) cfg.LIGHTWRAP.enabled = false;
   if (values["no-genbg"]) cfg.GENBG.enabled = false;
   if (values.genbg !== undefined) {
     if (!["hero", "all"].includes(values.genbg)) {

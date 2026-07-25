@@ -393,6 +393,10 @@ export async function compositeImage(
   }
 
   layers.push({ input: car, left, top });
+  if (cfg.LIGHTWRAP.enabled) {
+    const wrap = await buildLightWrap(background, car, left, top, canvas, cfg);
+    if (wrap) layers.push(wrap);
+  }
   let image = await sharp(background).composite(layers).png().toBuffer();
 
   if (cfg.GRAIN.enabled) {
@@ -405,6 +409,72 @@ export async function compositeImage(
     );
   }
   return { image, carLayer: { input: car, left, top } };
+}
+
+/**
+ * Light wrap: het licht van de scène een paar pixels de auto in laten bloeden.
+ *
+ * In een echte opname verlicht de omgeving het onderwerp ook langs de rand —
+ * de wand achter de auto werpt licht op de flanken. Een alfacomposiet mist dat
+ * volledig: er staat een mesrand tussen twee lagen. Gemeten op de daklijn van
+ * de Taycan-set ging de overgang van 152 naar 31 in twee pixels, zonder enige
+ * tussenwaarde. Dat leest als geplakt, ook als de rand technisch perfect is.
+ *
+ * Standaardtechniek uit compositing: neem de achtergrond, blur die, en laat
+ * hem alleen binnen een smalle band langs de binnenrand van het alfa
+ * doorkomen. `screen` licht op zonder detail te verdringen, en de band is
+ * begrensd tot de auto zelf — buiten het masker verandert er niets.
+ */
+async function buildLightWrap(
+  background: Buffer,
+  car: Buffer,
+  left: number,
+  top: number,
+  canvas: CanvasSize,
+  cfg: Config,
+): Promise<sharp.OverlayOptions | null> {
+  const meta = await sharp(car).metadata();
+  const w = meta.width ?? 0;
+  const h = meta.height ?? 0;
+  if (w < 8 || h < 8) return null;
+
+  const x0 = Math.max(0, left);
+  const y0 = Math.max(0, top);
+  const pw = Math.min(w, canvas.width - x0);
+  const ph = Math.min(h, canvas.height - y0);
+  if (pw < 8 || ph < 8) return null;
+
+  const alpha = await sharp(car).ensureAlpha().extractChannel(3).png().toBuffer();
+  // randband = alfa min een geblurde (dus gekrompen) versie van zichzelf. Waar
+  // het alfa vol is, heffen die elkaar op; alleen langs de rand blijft er wat
+  // over. Precies de zone waar het omgevingslicht hoort te bloeden.
+  const shrunk = await sharp(alpha).blur(cfg.LIGHTWRAP.width).png().toBuffer();
+  const band = await sharp(alpha)
+    .composite([{ input: shrunk, blend: "difference" }])
+    .linear([cfg.LIGHTWRAP.strength * 2], [0])
+    .resize(pw, ph, { fit: "fill" })
+    // strikt één kanaal: extractChannel levert grijs MET alfa (2 kanalen), en
+    // joinChannel verwacht precies het aantal dat het doelbeeld mist
+    .removeAlpha()
+    .toColourspace("b-w")
+    .png()
+    .toBuffer();
+
+  // het licht zelf: de achtergrond op deze plek, zwaar geblurd zodat er kleur
+  // en helderheid overkomt maar geen herkenbare structuur
+  const bgPatch = await sharp(background)
+    .extract({ left: x0, top: y0, width: pw, height: ph })
+    .blur(cfg.LIGHTWRAP.blur)
+    .removeAlpha()
+    .png()
+    .toBuffer();
+
+  // de band MOET het alfakanaal worden, niet een overlay: een dest-in met een
+  // grijswaarde-PNG maskeert op diens alfa (overal 255) en laat de wrap dan
+  // over de hele auto komen in plaats van alleen over de randband
+  const wrap = await sharp(bgPatch).joinChannel(band).png().toBuffer();
+
+  return { input: wrap, left: x0, top: y0, blend: "screen" };
 }
 
 /**
