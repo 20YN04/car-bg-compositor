@@ -1,40 +1,56 @@
 # car-bg-compositor
 
 Lokale test-tool voor achtergrondvervanging bij auto-foto's. Valideert of
-automatische background removal (fal.ai BiRefNet) + puur mathematische
-compositing (sharp) goed genoeg is voor verkoopfoto's, vóór er een
-productie-pipeline omheen wordt gebouwd.
+automatische background removal + puur mathematische compositing (sharp) goed
+genoeg is voor verkoopfoto's, vóór er een productie-pipeline omheen wordt
+gebouwd.
 
 De kern: masking en compositing zijn strikt gescheiden. Het alfamasker raakt
 de originele pixels niet aan en de compositing is puur mathematisch — velgen,
 badges en koplampen kunnen dus per definitie niet vervormen, in tegenstelling
 tot generatieve modellen die het beeld hertekenen.
 
+De achtergrond is een vaste, gekalibreerde studioplate
+(`backgrounds/showroom.jpg`) — geen generatieve stap. Dat maakt de uitvoer
+reproduceerbaar en gratis per beeld, en sluit de hele hallucinatieklasse
+(tweede auto, podium, verzonnen uitlaten, pseudo-tekst) uit.
+
 ## Setup
 
 ```sh
 pnpm install
-cp .env.example .env   # en vul FAL_KEY in (https://fal.ai/dashboard/keys)
+pip3 install rembg           # lokale matte, geen API-key nodig
 ```
 
-Leg inputfoto's (jpg/png) in `./in/`. Bij de eerste run wordt automatisch een
-neutrale gradient-achtergrond gegenereerd in `./backgrounds/default.png`;
-eigen achtergronden kun je daarnaast in `./backgrounds/` leggen.
+De default-pipeline draait volledig lokaal. Alleen de optionele fal.ai-stappen
+(auto-detectie, ruit-tint, plaat-anonimisatie, AI-kwaliteitscontrole) vragen
+een `FAL_KEY` in `.env` — zonder key slaan die stappen zichzelf over met een
+waarschuwing in plaats van het beeld te laten falen.
+
+Leg inputfoto's (jpg/png) in `./in/`. Zonder `--bg` draait de pipeline op
+`./backgrounds/showroom.jpg`; ontbreekt die plate, dan valt hij terug op een
+automatisch gegenereerde neutrale gradient in `./backgrounds/default.png`.
+
+> Een achtergrond zónder eigen entry in `BACKGROUND_PROFILES` valt terug op
+> `DEFAULT_PROFILE` — andere contactdiepte, schaal en reflectie. De pipeline
+> waarschuwt daarvoor; kalibreer een nieuwe plate in `src/config.ts`.
 
 ## Gebruik
 
 ```sh
-pnpm start                          # alles in ./in/
-node scripts/make-studio-bg.mjs     # genereer de carredo-achtige studioplate (eenmalig)
-pnpm start --bg studio.png          # composite op die studioplate
-pnpm start --genbg all              # generatieve scène op élke foto (default: hero)
+pnpm start                          # alles in ./in/, op backgrounds/showroom.jpg
 pnpm start --file foo.jpg           # één beeld
 pnpm start --bg studio-grey.jpg     # andere achtergrond (uit ./backgrounds/)
+pnpm start --matte rembg            # lokale matte (gratis, geen FAL_KEY) — default
+pnpm start --rembg-model isnet-general-use   # ander lokaal rembg-model
+pnpm start --segment sam3           # SAM 3 i.p.v. Florence-2 + SAM 2 (nog ongeverifieerd)
+pnpm start --genbg hero             # generatieve scène aanzetten (default: uit)
 pnpm start --ground-y 1100          # config overriden zonder file-edit
 pnpm start --car-width 0.75         # idem
 pnpm start --no-cache               # forceer nieuwe API-calls
 pnpm start --no-debug               # sla debug-output over
 pnpm start --no-ai                  # sla plaat-anonimisatie + AI-checks over
+pnpm start --no-qa                  # alleen de VLM-kwaliteitschecks uit (plaat blijft)
 pnpm start --no-detect              # sla auto-detectie over (onbegrensd masker)
 pnpm start --plate replace          # plaat vervangen i.p.v. blurren (of: off)
 pnpm start --no-windows             # ruiten niet donker tinten
@@ -69,14 +85,67 @@ draaien (bijv. tijdens het tunen van de compositing) kost geen API-credits.
 | `PLATE` | nummerplaat-anonimisatie: `blur` (default, GDPR), `replace` (plaat met `AI.plateText` of `overlayPath`), `off`; `style` gaussian of mosaic |
 | `AI` | plaatdetectie (Florence-2) en AI-kwaliteitscontroles via een vision-model (masker compleet? auto op de grond?) |
 | `WINDOWS` | ruiten donker tinten (Florence-2-detectie + SAM2-masker + wiskundige verdonkering) zodat de oorspronkelijke omgeving niet door het glas zichtbaar blijft; `tintOpacity`/`tintColor`/`featherSigma` bepalen de look |
-| `MATTE` | instance-matte: BiRefNet-alfa begrensd met een SAM2-instancemasker (auto-box als prompt) — scherpe wielranden, geen aangesmolten grondschaduw |
+| `MATTE` | instance-matte: het alfa wordt begrensd met een SAM2-instancemasker (auto-box als prompt) — scherpe wielranden, geen aangesmolten grondschaduw. `provider` kiest het matte-model: `rembg` (default, lokaal en gratis; `rembgModel` selecteert `bria-rmbg`/`birefnet-general`/`u2net`) of `fal-rmbg`/`fal-birefnet` via de API |
 | `BACKGROUND_PROFILES` | kalibratie per achtergrond-plate: `contactTargetY` (vloerlijn), `floorScaleRef` (px/m), lichtrichting/zachtheid, vloerreflectiviteit. **Belangrijk:** de camerahoogte/-hoek van de plate moet bij de auto-shots passen; willekeurige plates werken niet — een mismatch is een plate-keuzeprobleem, geen codebug |
 | `HARMONIZE` | kleur/belichting van de auto subtiel richting de achtergrondtoon (per-kanaal gains met cap) — puur curves, geen generatieve stap |
 | `HIGHLIGHTS` | specular-compressie: dempt felle reflecties van de oorspronkelijke omgeving (tl-balken, spots) in de lak via een soft-knee curve; de knee schuift adaptief mee met de autohelderheid zodat een witte auto niet afvlakt |
-| `GENBG` | hybride scène-stap (FLUX Fill): herschildert achtergrond + contactschaduw + vloerreflectie rond de auto; de originele autopixels gaan er daarna ALTIJD pixel-exact terug overheen. Elke poging passeert een hallucinatie-poort (Florence-telling vreemde auto's via IoU met de eigen positie + VLM-checks op podium/vloermarkering en verzonnen uitlaten, differentieel t.o.v. de cutout); afgekeurd → nieuwe seed, na `maxAttempts` → mathematisch composiet + `GENBG_REJECTED`. `mode: "hero"` (default) beperkt de scène tot de eerste bruikbare foto per batch (scenario C: premium hero, consistente rest, ~$0.05–0.15 per listing i.p.v. per foto); `--genbg all` voor elke foto, `--no-genbg` om uit te zetten |
+| `GENBG` | **default uit** sinds de gekalibreerde studioplate er is. Hybride scène-stap (FLUX Fill of Gemini): herschildert achtergrond + contactschaduw + vloerreflectie rond de auto; de originele autopixels gaan er daarna ALTIJD pixel-exact terug overheen. Elke poging passeert een hallucinatie-poort (Florence-telling vreemde auto's via IoU met de eigen positie + VLM-checks op podium/vloermarkering en verzonnen uitlaten, differentieel t.o.v. de cutout); afgekeurd → nieuwe seed, na `maxAttempts` → mathematisch composiet + `GENBG_REJECTED`. Aanzetten met `--genbg hero` (eerste bruikbare foto per batch) of `--genbg all` |
+| `GEMINI` | Gemini Nano Banana als GENBG-provider. `aspectRatio` moet de `CANVAS`-verhouding volgen — zonder die instelling levert het model 3:2 terwijl het canvas 4:3 is, en schuift de cover-crop de gegenereerde vloerlijn weg onder de teruggeplakte auto. De seed gaat mee in `generation_config`, niet alleen in de cachesleutel |
 | `PRESETS` | per-hoek kadrering (side/front34/rear34): eigen spanwijdte en optioneel contactlijn |
 | `MONTHLY_VOLUME` | beeldvolume voor de kostenextrapolatie (default 75.000) |
 | `COST_PER_CALL_USD` | prijs per API-call voor de kostenschatting — ijken op het fal-dashboard |
+
+## Set-consistentie
+
+Alle foto's van één auto (= één submap in `./in/`) worden eerst naar een
+gedeeld witpunt getrokken — de per-kanaal mediaan over de set — en pas daarna
+verschuift de set als geheel naar de plate-toon. Zonder die stap krijgt elke
+foto zijn eigen `harmonizeGains` en leest een set die deels in de ochtend en
+deels in de namiddag geschoten is als twee verschillende auto's. De mediaan
+maakt het robuust tegen één afwijkende opname.
+
+Kost geen extra API-calls: de voorpas leest dezelfde cutout die `processImage`
+daarna uit de cache haalt. Uit te zetten met `HARMONIZE.setConsistent: false`.
+
+Dit is de stap die de commerciële pipelines onderscheidt van een
+per-foto-script — zie [Spyne over batch-uitvoering per
+voertuig](https://www.spyne.ai/blogs/car-photo-editing-for-dealerships-manual-vs-ai).
+
+## Segmentatie: SAM 3 als eenstapsroute
+
+De pipeline lost "vind object X en geef me zijn masker" nu in twee calls op:
+Florence-2 maakt boxes uit een tekstprompt, SAM 2 maakt daar maskers van. Dat
+is twee modellen en twee foutkansen voor één antwoord — inclusief de bekende
+faalmodus dat Florence een lange prompt op "the car" ground en een full-frame
+box teruggeeft (vandaar de korte prompts in `WINDOWS.detectPrompts`).
+
+[SAM 3](https://fal.ai/models/fal-ai/sam-3/image/api) (`fal-ai/sam-3/image`,
+$0.005/call) doet detectie én segmentatie in één call uit dezelfde tekstprompt,
+met per-masker confidence-scores om op te filteren.
+
+**Status: gebouwd maar niet geverifieerd.** `--segment sam3` schakelt de
+ruit- en wielstappen om; de plaat- en matte-stappen blijven bewust op het
+beproefde pad. Controleer één beeld voordat je een batch draait — let vooral op
+de box-conventie: de docs zeggen genormaliseerd `[cx, cy, w, h]`, `toAbsoluteBox`
+heeft daar een guard voor maar dat is nog niet tegen een echte respons getest.
+
+## Matte-model kiezen
+
+| Provider | Kwaliteit | Kosten | Draait |
+| --- | --- | --- | --- |
+| `fal-rmbg` (RMBG 2.0) | beste — strakke daklijn, ronde bandonderkanten, scherpe spaken | API-call | vereist geldige `FAL_KEY` |
+| `fal-birefnet` | vergelijkbaar; platte de band bij één testbeeld licht af (A/B 2026-07-23) | API-call | vereist geldige `FAL_KEY` |
+| `rembg` + `isnet-general-use` | scherpe rand (~1px overgang) — lokale default | gratis | lokaal, ~6 s |
+| `rembg` + `u2net` | brede wazige overgangsband: zichtbaar geknaagde daklijn | gratis | lokaal, ~6 s |
+| `rembg` + `bria-rmbg` / `birefnet-general` | zelfde families als fal | gratis | **niet praktisch zonder GPU** |
+
+Gemeten 2026-07-25 op één beeld (1600×1066, CPU zonder GPU-provider). De zware
+varianten zijn ~1 GB ONNX en kwamen na 28 minuten niet door één beeld; het
+systeem swapte. De lichte twee draaien allebei in ~6 s, en `isnet-general-use`
+geeft daarbij een merkbaar strakkere alfarand dan `u2net` — gratis winst.
+
+De kwaliteitsroute blijft `fal-rmbg`. Wil je lokaal nóg beter, dan is
+GPU-acceleratie voor onnxruntime de voorwaarde, niet een andere modelkeuze.
 
 ## Kwaliteitscontrole
 

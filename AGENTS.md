@@ -1,8 +1,9 @@
 # AGENTS.md — car-bg-compositor
 
-Lokale test-tool voor achtergrondvervanging bij auto-verkoopfoto's (fal.ai
-BiRefNet-masking + puur mathematische compositing met sharp). Doel: bewijzen
-dat dit beter is dan generatieve modellen die velgen/badges hertekenen.
+Lokale test-tool voor achtergrondvervanging bij auto-verkoopfoto's (lokale
+rembg-masking + puur mathematische compositing met sharp op een vaste,
+gekalibreerde studioplate). Doel: bewijzen dat dit beter is dan generatieve
+modellen die velgen/badges hertekenen.
 
 ## Git workflow (REQUIRED)
 
@@ -37,6 +38,20 @@ Hard rules:
   van deze tool is dat originele pixels (velgen, badges, koplampen) nooit
   hertekend worden. Masking/AI mag alleen selecteren, nooit genereren.
 
+## Achtergrond-plates
+
+De achtergrond is een vaste plate in `./backgrounds/` (gitignored, dus lokaal
+asset). Elke plate hoort een entry in `BACKGROUND_PROFILES` te hebben, gekeyed
+op de **exacte bestandsnaam**; zonder match valt de plaatsing stil terug op
+`DEFAULT_PROFILE` — andere contactdiepte, schaal en reflectie. De pipeline
+waarschuwt daarvoor.
+
+Hard rule: hernoem een plate nooit zonder de key in `src/config.ts` mee te
+hernoemen.
+
 ## Secrets
 
-`FAL_KEY` hoort in `.env` (gitignored). Nooit committen, nooit loggen.
+`FAL_KEY` hoort in `.env` (gitignored). Nooit committen, nooit loggen. De
+default-pipeline draait zonder key; alleen de optionele fal-stappen
+(auto-detectie, ruit-tint, plaat-anonimisatie, AI-checks) hebben er een nodig
+en slaan zichzelf over met een waarschuwing als hij ontbreekt of ongeldig is.
