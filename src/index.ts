@@ -74,6 +74,7 @@ import {
   type ChannelMeans,
 } from "./harmonize.js";
 import { applyBranding } from "./branding.js";
+import { adoptSceneLight, alignCarRegion, findCarBox } from "./relight.js";
 import {
   analyzePaint,
   attenuateReflectionStructure,
@@ -761,6 +762,10 @@ async function processImage(
   // blijft, de kleur verdwijnt. Achterlichten en badges zijn beschermd.
   let paintDamped = 0;
   let paintSmoothed = 0;
+  // op functieniveau: de waarde ontstaat in de scène-stap maar wordt in
+  // run.jsonl geschreven, buiten dat blok
+  let relightStats: { meanShift: number; maxShift: number; clipped: number } | null = null;
+  let alignBox: { hun: unknown; ons: unknown } | null = null;
   if (cfg.PAINT.enabled && analysis.bbox) {
     const stats = analyzePaint(data, alpha, width, height, cfg.PAINT);
     // het gewicht per pixel bewaren: de tweede stap mag alleen aankomen waar
@@ -1159,6 +1164,7 @@ async function processImage(
           }
         } else {
         const isGemini = cfg.GENBG.provider === "gemini";
+        const showCar = isGemini && cfg.GENBG.relight.enabled && cfg.GENBG.relight.showCar;
         const isQwen = cfg.GENBG.provider === "qwen";
         // Zwart afdekken werkt NIET bij instructie-editors: ze lezen het
         // zwarte silhouet als inhoud. Gemini vulde het gat met een verzonnen
@@ -1224,8 +1230,14 @@ async function processImage(
         for (let attempt = 0; attempt < cfg.GENBG.maxAttempts; attempt++) {
           const scene = isGemini
             ? await generateScene(
-                fillInput, cfg.GEMINI.maskPrefix + cfg.GENBG.prompt, cfg.GEMINI,
-                CACHE_DIR, cli.useCache, cfg.GENBG.seed + attempt,
+                // met showCar krijgt het model het composiet mét de auto en
+                // alleen de opdracht om te belichten; het zwarte masker gaf
+                // een zwart vlak terug en dus niets om over te nemen
+                showCar ? mathComposite : fillInput,
+                showCar
+                  ? cfg.GEMINI.relightPrompt
+                  : cfg.GEMINI.maskPrefix + cfg.GENBG.prompt,
+                cfg.GEMINI, CACHE_DIR, cli.useCache, cfg.GENBG.seed + attempt,
               )
             : isQwen
             ? await generateSceneQwen(
@@ -1306,10 +1318,80 @@ async function processImage(
             });
           }
           guardLayers.push(carLayer);
-          const candidate = await sharp(sceneFull)
+          let candidate = await sharp(sceneFull)
             .composite(guardLayers)
             .png()
             .toBuffer();
+
+          // Het licht van de scène overnemen zonder de auto te hertekenen.
+          //
+          // Zonder deze stap is de terugplak alles-of-niets: het model blendt
+          // de auto werkelijk in de scène — de vloer kaatst terug op de
+          // dorpel, de wand licht de flank op, onder de wielkast wordt het
+          // donker — en dat zit ín de autopixels. Plakken we het origineel er
+          // pixel-exact overheen, dan gooien we precies die integratie weg.
+          // Identiteit behouden, blend verloren.
+          //
+          // De lage frequentie mag van het model komen (dat is belichting),
+          // de hoge blijft van ons (dat is de auto). Begrensd en gemeten.
+          if (cfg.GENBG.relight.enabled) {
+            // Eerst uitlijnen. Het model verplaatst en herschaalt de auto —
+            // gemeten schoof Gemini hem op en maakte hem groter — en dan komt
+            // het lokale gemiddelde van carrosserie waar bij ons lucht zit.
+            let lightSource = sceneFull;
+            const grey = await sharp(sceneFull)
+              .greyscale()
+              .raw()
+              .toBuffer();
+            const theirs = findCarBox(
+              grey, cfg.CANVAS.width, cfg.CANVAS.height, contactYUsed,
+              cfg.GENBG.relight.carThreshold,
+            );
+            const ourBox = {
+              left: Math.round(placement.x),
+              top: Math.round(placement.y),
+              width: Math.round(placement.width),
+              height: Math.round(placement.height),
+            };
+            if (theirs) {
+              alignBox = { hun: theirs, ons: ourBox };
+              lightSource = await alignCarRegion(sceneFull, theirs, ourBox);
+            }
+            const carAlpha = await sharp(carLayer.input)
+              .ensureAlpha()
+              .extractChannel(3)
+              .png()
+              .toBuffer();
+            const maskFull = await sharp({
+              create: {
+                width: cfg.CANVAS.width,
+                height: cfg.CANVAS.height,
+                channels: 3,
+                background: { r: 0, g: 0, b: 0 },
+              },
+            })
+              .composite([{ input: carAlpha, left: carLayer.left, top: carLayer.top }])
+              .greyscale()
+              .png()
+              .toBuffer();
+            const relit = await adoptSceneLight(
+              lightSource, candidate, maskFull,
+              Math.max(2, Math.round(cfg.CANVAS.width * cfg.GENBG.relight.radiusRatio)),
+              cfg.GENBG.relight.maxShift,
+            );
+            relightStats = {
+              meanShift: Number(relit.meanShift.toFixed(2)),
+              maxShift: Number(relit.maxShift.toFixed(1)),
+              clipped: Number(relit.clipped.toFixed(3)),
+            };
+            // Loopt een groot deel tegen de begrenzing aan, dan lag de
+            // gegenereerde auto niet op de onze — een ander model, een andere
+            // kleur, een verschoven plaatsing. Dan is dit geen belichting meer
+            // en hoort het beeld afgekeurd te worden in plaats van gered.
+            if (relit.clipped <= cfg.GENBG.relight.maxClipped) {
+              candidate = relit.image;
+            }
+          }
           const checkJpeg = await sharp(candidate).jpeg({ quality: 85 }).toBuffer();
           // deterministische tweede-auto-check: Florence vindt auto's
           // betrouwbaarder dan een klein VLM ze in een ja/nee-vraag ziet.
@@ -1519,6 +1601,9 @@ async function processImage(
         wheelScale: wheelScale === null ? null : Number(wheelScale.toFixed(4)),
         wheelsMeasured: measuredWheels.length,
         preset: cli.preset ?? null,
+        levelled: Number(levelled.toFixed(2)),
+        relight: relightStats,
+        relightAlign: alignBox,
         harmonizeGains: harmonizeGains
           ? {
               r: Number(harmonizeGains.r.toFixed(3)),

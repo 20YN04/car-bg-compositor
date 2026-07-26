@@ -382,6 +382,50 @@ export interface QwenConfig {
   keepPrefix: string;
 }
 
+export interface RelightConfig {
+  /**
+   * Het licht van de gegenereerde scène overnemen binnen de auto, in plaats
+   * van de originele pixels er hard overheen te plakken. Zonder dit is de
+   * garantie alles-of-niets: identiteit behouden, blend weggegooid.
+   */
+  enabled: boolean;
+  /**
+   * Wat als belichting telt, als fractie van de canvasbreedte. Alles grover
+   * komt van het model, alles fijner blijft van ons.
+   *
+   * Als fractie en niet in pixels, want de doelen verschillen van maat
+   * (studio 1248, showroom 1920) en dezelfde pixelstraal zou daar een andere
+   * scheiding leggen.
+   *
+   * Gemeten op de Taycan: bij 0,019 (24 px op 1248) bleven er vegen op het dak
+   * en de flank staan — dat is het model dat zijn carrosserielijnen nét naast
+   * de onze legt, en die verschuiving is te fijn om als belichting door te
+   * gaan. Bij 0,064 middelt dat weg en zakt de begrensde fractie van 24% naar
+   * 4%. Ruim boven badges, velgspaken en panelnaden, dus de identiteit blijft.
+   */
+  radiusRatio: number;
+  /**
+   * De auto tonen aan het model in plaats van hem achter een zwart masker te
+   * verbergen. Kan alleen mét deze stap: het detail dat het model verzint
+   * wordt weggegooid, alleen zijn licht komt binnen.
+   */
+  showCar: boolean;
+  /**
+   * Onder deze grijswaarde telt een pixel als carrosserie bij het opzoeken van
+   * de auto in de gegenereerde scène. De studio meet 140 tot 230, dus daar zit
+   * ruim licht tussen.
+   */
+  carThreshold: number;
+  /** Hoeveel niveaus een pixel maximaal mag opschuiven. */
+  maxShift: number;
+  /**
+   * Fractie van de maskerpixels die tegen die grens mag aanlopen. Daarboven
+   * lag de gegenereerde auto niet op de onze — ander model, andere kleur,
+   * verschoven plaatsing — en is dit geen belichting meer.
+   */
+  maxClipped: number;
+}
+
 export interface GenBgConfig {
   /**
    * Hybride scène-stap: FLUX Fill herschildert achtergrond + contactschaduw
@@ -403,6 +447,7 @@ export interface GenBgConfig {
   modelId: string;
   prompt: string;
   costPerCall: number; // ijken op het fal-dashboard
+  relight: RelightConfig;
   seed: number; // basisseed; per afgekeurde poging +1
   maxAttempts: number; // hallucinatie-poort: max scène-pogingen
   /**
@@ -443,6 +488,18 @@ export interface GeminiConfig {
   costPerCall: number;
   /** Prefix voor de GENBG-prompt: vertelt Gemini dat het zwarte silhouet een placeholder is. */
   maskPrefix: string;
+  /**
+   * Prompt voor de relight-route: het model krijgt het mathematische composiet
+   * mét de auto en hoeft alleen te belichten, niet te verzinnen.
+   *
+   * Dit kan pas sinds de frequentiesplitsing bij de terugplak. Daarvoor moest
+   * het model de auto ongemoeid laten, want alles wat het tekende kwam in het
+   * eindbeeld; dus verstopten we de auto achter een zwart masker. Gemini gaf
+   * dat zwarte vlak dan gewoon terug als zwart vlak — er viel niets te
+   * blenden. Nu we alleen de lage frequentie overnemen, mag het model de auto
+   * hertekenen: het detail gooien we toch weg. We vragen alleen om licht.
+   */
+  relightPrompt: string;
   /**
    * Prompt voor de showroom-provider: meerdere invoerbeelden (cutout op
    * transparantie, plate, positioneringsraster, stijlreferenties). Overgenomen
@@ -1046,6 +1103,17 @@ export const defaultConfig: Config = {
       "The car stands directly on the flat floor — no podium, no " +
       "turntable, no platform. Photorealistic.",
     costPerCall: 0.05, // 1 MP-fill @ $0.05/MP (afgerond naar boven)
+    // straal 24 op een canvas van 1920: ruim boven badges en panelnaden, en
+    // ook boven een velgspaak (~15 px), zodat die hooguit meebelicht wordt en
+    // nooit verdwijnt
+    relight: {
+      enabled: true,
+      showCar: true,
+      carThreshold: 90,
+      radiusRatio: 0.064,
+      maxShift: 36,
+      maxClipped: 0.25,
+    },
     seed: 20260724,
     maxAttempts: 3,
     fillMaxMegapixels: 1,
@@ -1061,6 +1129,18 @@ export const defaultConfig: Config = {
      * een zwart gemaskeerde auto-silhouet — zonder deze instructie vult
      * Gemini dat zwarte gat op met een zelf verzonnen auto.
      */
+    relightPrompt:
+      "Relight this car so it looks physically present in this studio. " +
+      "Add the light the room casts on it: the floor bouncing up into the " +
+      "sills and lower bodywork, the bright wall reflecting along the flank " +
+      "and roof, ambient occlusion darkening under the wheel arches and " +
+      "between the tyres and the floor, and a soft contact shadow plus floor " +
+      "reflection beneath the car. " +
+      "Keep the car in exactly the same position, at exactly the same size, " +
+      "in exactly the same pose. Do not move it, do not rotate it, do not " +
+      "change its proportions or its silhouette. Do not add a second car. " +
+      "Keep the background a plain studio sweep with no props, no text, no " +
+      "floor markings and no people.",
     maskPrefix:
       "The black silhouette is a masked-out placeholder for a car. " +
       "Do NOT draw or generate any car, vehicle, or object in the black " +
