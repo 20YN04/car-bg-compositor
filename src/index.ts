@@ -214,7 +214,7 @@ function parseCli(): { cfg: Config; cli: CliOptions } {
       throw new Error("--segment moet florence-sam2 of sam3 zijn");
     }
     const v = values.segment as SegmentProvider;
-    cfg.SEGMENT.providers = { windows: v, wheels: v };
+    cfg.SEGMENT.providers = { car: v, windows: v, wheels: v };
   }
   if (values["rembg-model"] !== undefined) {
     cfg.MATTE.rembgModel = values["rembg-model"];
@@ -481,11 +481,19 @@ async function processImage(
   if (cfg.MATTE.enabled && cli.ai && detection) {
     try {
       const b = detection.box;
-      const maskPng = await segmentByBoxes(
-        inputBytes,
-        [{ x: b.left, y: b.top, w: b.right - b.left + 1, h: b.bottom - b.top + 1 }],
-        cfg.WINDOWS.segmentModelId, CACHE_DIR, cli.useCache,
-      );
+      const maskPng =
+        cfg.SEGMENT.providers.car === "sam3"
+          ? await fetchUnionMask(
+              await segmentByText(
+                inputBytes, cfg.SEGMENT.prompts.car, CACHE_DIR, cfg.SEGMENT, cli.useCache,
+              ),
+              width, height,
+            )
+          : await segmentByBoxes(
+              inputBytes,
+              [{ x: b.left, y: b.top, w: b.right - b.left + 1, h: b.bottom - b.top + 1 }],
+              cfg.WINDOWS.segmentModelId, CACHE_DIR, cli.useCache,
+            );
       const raw = await sharp(maskPng)
         .resize(width, height, { fit: "fill" })
         .greyscale()

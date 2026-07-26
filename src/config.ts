@@ -78,7 +78,7 @@ export interface SegmentConfig {
    *
    * --segment zet beide om, voor het vergelijken van de twee routes.
    */
-  providers: { windows: SegmentProvider; wheels: SegmentProvider };
+  providers: { car: SegmentProvider; windows: SegmentProvider; wheels: SegmentProvider };
   modelId: string; // fal-ai/sam-3/image
   costPerCall: number; // $0.005, gepubliceerd tarief (niet geschat)
   maxMasks: number;
@@ -101,7 +101,20 @@ export interface MatteConfig {
    * randen, SAM2 maakt de wielranden scherp.
    */
   enabled: boolean;
-  dilateRadius: number; // bescherming van dunne delen tegen SAM2's grovere rand
+  /**
+   * Marge waarmee het instancemasker wordt opgeblazen voordat het het
+   * BiRefNet-alfa begrenst — bescherming van dunne delen tegen de grovere rand
+   * van het instancemodel.
+   *
+   * Stond op 4 en dat was te ruim: precies in die marge overleefde een strook
+   * boomkruin die BiRefNet aan de daklijn had vastgeplakt. Bij een donkere
+   * auto onder bomen loopt dat als een rafelige olijfkleurige rand over het
+   * dak, en omdat de lakdemping die strook ook ontkleurt is hij niet op kleur
+   * te betrappen. Gemeten kost terugbrengen naar 0 maar 0,56% van de
+   * autopixels en is er geen detail zichtbaar dat verdwijnt; 1 houdt een
+   * pixel over voor de antialiasing.
+   */
+  dilateRadius: number;
   featherSigma: number;
   /** Basis-matte-model; de SAM2-combine en box-begrenzing blijven gelijk. */
   provider: MatteProvider;
@@ -823,7 +836,7 @@ export const defaultConfig: Config = {
     boxMargin: 0.02,
   },
   SEGMENT: {
-    providers: { windows: "sam3", wheels: "florence-sam2" },
+    providers: { car: "florence-sam2", windows: "sam3", wheels: "florence-sam2" },
     modelId: "fal-ai/sam-3/image",
     costPerCall: 0.005,
     maxMasks: 8, // ruiten: voorruit + zijruiten + achterruit halen dit makkelijk
@@ -839,7 +852,7 @@ export const defaultConfig: Config = {
   },
   MATTE: {
     enabled: true,
-    dilateRadius: 4,
+    dilateRadius: 1,
     featherSigma: 1, // strakkere rand; 2 maakte de outline zichtbaar zacht
     // A/B op ARV/RV/RVV (2026-07-23): RMBG 2.0 geeft vollere, rondere
     // bandonderkanten (BiRefNet plat de band bij RV licht af) bij even
