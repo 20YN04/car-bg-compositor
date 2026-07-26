@@ -9,6 +9,7 @@ import {
   applyInstanceMatte,
   cleanAlpha,
   clustersFromWheelBoxes,
+  groundCutY,
   dilateMask,
   erodeAlpha,
   restrictAlphaToBox,
@@ -713,9 +714,16 @@ async function processImage(
     // lage camera hangt de voorspoiler in projectie lager dan het
     // bandcontactpunt en zou hij hier als "schaduw" sneuvelen
     const bboxHeight = analysis.bbox.bottom - analysis.bbox.top + 1;
-    const maxTrim = Math.round(bboxHeight * cfg.GROUND_TRIM_MAX_RATIO);
-    const cutY = Math.max(analysis.groundLine + slack, analysis.bbox.bottom - maxTrim);
-    groundTrimCapped = cutY > analysis.groundLine + slack;
+    const cut = groundCutY(
+      analysis.bbox.top,
+      analysis.bbox.bottom,
+      analysis.groundLine,
+      measuredWheels.map((w) => w.y + w.h),
+      slack,
+      cfg.GROUND_TRIM_MAX_RATIO,
+    );
+    const cutY = cut.cutY;
+    groundTrimCapped = cut.capped;
     groundTrimmedPx = trimAlphaBelow(alpha, width, height, cutY);
     if (groundTrimmedPx > 0) {
       for (let i = 0; i < alpha.length; i++) data[i * 4 + 3] = alpha[i] ?? 0;

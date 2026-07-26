@@ -944,3 +944,44 @@ export function erodeAlpha(
   }
   return out;
 }
+
+export interface GroundCut {
+  cutY: number;
+  capped: boolean;
+  /** De wieldetectie hield de trim tegen. */
+  wheelGuarded: boolean;
+}
+
+/**
+ * Tot welke hoogte het masker onder de wiellijn wordt weggesneden.
+ *
+ * De grondlijn komt uit een geometrische regel op het alfa: neem de diepste
+ * rij die nog 80% van de clusterbreedte vult. Bij een zijaanzicht klopt dat,
+ * maar een band die je schuin ziet versmalt juist naar zijn contactvlak toe —
+ * dus kapt die regel de band af precies waar hij de grond raakt. Gemeten op
+ * beeld (6) van de Taycan-set: grondlijn op 924 terwijl de band de grond raakt
+ * op 976, en er verdween 23 px echte band met een zichtbaar rechte snee.
+ *
+ * De wieldetectie is een onafhankelijk, semantisch signaal dat op dit punt al
+ * beschikbaar is. Zegt die dat er nog band zit, dan wint dat van de
+ * geometrische schatting: er wordt alleen onder het wiel gesneden, nooit
+ * erdoorheen. Zonder wielmeting blijft de oude begrenzing gelden.
+ */
+export function groundCutY(
+  bboxTop: number,
+  bboxBottom: number,
+  groundLine: number,
+  wheelBottoms: number[],
+  slack: number,
+  maxTrimRatio: number,
+): GroundCut {
+  const maxTrim = Math.round((bboxBottom - bboxTop + 1) * maxTrimRatio);
+  const wanted = groundLine + slack;
+  let cutY = Math.max(wanted, bboxBottom - maxTrim);
+  const capped = cutY > wanted;
+  const lowestWheel = wheelBottoms.reduce((low, y) => Math.max(low, y), -1);
+  if (lowestWheel > cutY) {
+    return { cutY: Math.min(bboxBottom, lowestWheel), capped: false, wheelGuarded: true };
+  }
+  return { cutY, capped, wheelGuarded: false };
+}

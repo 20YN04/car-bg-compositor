@@ -12,6 +12,7 @@ import {
   sharpenAlphaEdges,
   restrictAlphaToBox,
   trimAlphaBelow,
+  groundCutY,
 } from "./bbox.js";
 
 const OPTS = { threshold: 10, groundPercentile: 0.95, minBlobArea: 0.005 };
@@ -422,5 +423,57 @@ describe("erodeAlpha", () => {
     const eroded = erodeAlpha(alpha, 20, 20);
     const { bbox } = computeBBox(eroded, 20, 20, 10);
     expect(bbox).toEqual({ left: 6, top: 6, right: 13, bottom: 13 });
+  });
+});
+
+/**
+ * Gemeten op beeld (6) van de Taycan-set: de grondlijn kwam op 924 uit terwijl
+ * de band de grond raakt op 976. De geometrische regel achter die grondlijn
+ * neemt de diepste rij die nog 80% van de clusterbreedte vult, en een band die
+ * je schuin ziet versmalt naar zijn contactvlak toe — dus kapt hij de band af
+ * precies waar hij de grond raakt.
+ */
+describe("groundCutY", () => {
+  const TOP = 206;
+  const BOTTOM = 976;
+  const SLACK = 4;
+  const RATIO = 0.03;
+
+  it("snijdt niet door een gedetecteerd wiel heen", () => {
+    const c = groundCutY(TOP, BOTTOM, 924, [976, 705], SLACK, RATIO);
+    expect(c.wheelGuarded).toBe(true);
+    expect(c.cutY).toBe(976);
+    expect(c.capped).toBe(false);
+  });
+
+  it("volgt de grondlijn wanneer die onder het laagste wiel ligt", () => {
+    // hier zegt de geometrie dat er masker onder de wielen zit: dat is de
+    // aangesmolten slagschaduw en die hoort weg. Grondlijn ruim binnen de
+    // 3%-marge, anders bindt die cap en meet je hem in plaats van de guard.
+    const c = groundCutY(TOP, BOTTOM, 960, [950, 900], SLACK, RATIO);
+    expect(c.wheelGuarded).toBe(false);
+    expect(c.cutY).toBe(964);
+    expect(c.capped).toBe(false);
+  });
+
+  it("de 3%-cap blijft gelden en is los van de wielguard", () => {
+    // een grondlijn die een kwart van de auto zou wegsnijden hoort begrensd te
+    // worden, ook als er geen wiel in de buurt is
+    const c = groundCutY(TOP, BOTTOM, 700, [690, 640], SLACK, RATIO);
+    expect(c.capped).toBe(true);
+    expect(c.cutY).toBe(953);
+  });
+
+  it("valt zonder wielmeting terug op de oude begrenzing", () => {
+    const c = groundCutY(TOP, BOTTOM, 924, [], SLACK, RATIO);
+    expect(c.wheelGuarded).toBe(false);
+    // 3% van 771 = 23, dus niet dieper dan 953
+    expect(c.cutY).toBe(953);
+    expect(c.capped).toBe(true);
+  });
+
+  it("snijdt nooit onder de bbox", () => {
+    const c = groundCutY(TOP, BOTTOM, 924, [1200], SLACK, RATIO);
+    expect(c.cutY).toBe(BOTTOM);
   });
 });
