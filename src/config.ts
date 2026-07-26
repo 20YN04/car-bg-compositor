@@ -672,7 +672,14 @@ export interface Config {
    * canvasbreedte (de config mikte oorspronkelijk op 0,72), 3/4 rond 0,46.
    */
   FRAMING_GAIN: number;
-  ERODE_MASK: boolean; // 1px erosie tegen kleurhalo's van de originele achtergrond
+  /**
+   * 1 px erosie tegen kleurhalo's van de originele achtergrond.
+   *
+   * Aan sinds 2026-07-26: gemeten randbreedte van de silhouetovergang gaat van
+   * 3,42 naar 3,08 px op beeld (8) en van 2,43 naar 2,18 op (9). Bescheiden,
+   * maar het is de enige van drie geprobeerde ingrepen die iets deed.
+   */
+  ERODE_MASK: boolean;
   MASK_CLEAN: MaskCleanConfig; // opschoning: dunne/losstaande structuren (windmolen, paal) weg
   SHADOW: ShadowConfig;
   JPEG_QUALITY: number;
@@ -789,7 +796,7 @@ export const defaultConfig: Config = {
   GROUND_TRIM_MAX_RATIO: 0.03,
   WHEEL_DIAMETER_M: 0.7,
   FRAMING_GAIN: 1.0,
-  ERODE_MASK: false,
+  ERODE_MASK: true,
   MASK_CLEAN: {
     enabled: true,
     openRadiusRatio: 0.003, // ~6px bij 2048: windmolen weg, antenne blijft heel
