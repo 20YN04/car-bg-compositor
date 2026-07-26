@@ -284,6 +284,18 @@ export interface PaintConfig {
   /** Onder deze mediane verzadiging geldt de auto als zwart/wit/grijs. */
   achromaticSat: number;
   /**
+   * Randlicht dempen: de lichte lijn die het silhouet volgt omdat de auto
+   * buiten de hele hemel op zijn daklijst ving. Gemeten steekt die bij de
+   * referentie 28 niveaus boven de lak uit, bij ons 89 en 64.
+   */
+  rimStrength: number;
+  /** Breedte van de band binnen de rand, als fractie van de autohoogte. */
+  rimWidthRatio: number;
+  /** Straal voor het lokale lakniveau, als fractie van de autohoogte. */
+  rimPaintRatio: number;
+  /** Hieronder telt het als lak, niet als randlicht. */
+  rimMinExcess: number;
+  /**
    * De vórm van de gespiegelde omgeving dempen, niet alleen de kleur. Een
    * ontkleurd bladerdek op het dak leest nog steeds als "stond onder bomen".
    * Werkt alleen waar de dempstap de pixel al als omgeving aanwees, dus vlakke
@@ -1077,6 +1089,10 @@ export const defaultConfig: Config = {
     selective: true,
     contrastRadius: 6,
     contrastFull: 6,
+    rimStrength: 0.8,
+    rimWidthRatio: 0.08,
+    rimPaintRatio: 0.22,
+    rimMinExcess: 8,
     structureStrength: 0.8,
     structureFineRadius: 2,
     structureCoarseRadius: 24,

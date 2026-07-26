@@ -79,6 +79,7 @@ import {
   analyzePaint,
   attenuateReflectionStructure,
   dampEnvironmentReflections,
+  dampRimLight,
 } from "./paint.js";
 import { auditComposite, auditWarnings, type CompositeAudit } from "./audit.js";
 import { classifyExterior, runQA, type QAWarning } from "./qa.js";
@@ -781,6 +782,16 @@ async function processImage(
     const weights = new Float32Array(width * height);
     paintDamped = dampEnvironmentReflections(
       data, alpha, width, height, stats, cfg.PAINT, weights,
+    );
+    // randlicht: de structuurdemping laat de helderheid met rust, dus de
+    // lichte lijn langs het silhouet staat er dan nog. Maten schalen mee met
+    // de autohoogte zodat ze niet aan één bronresolutie vastzitten.
+    const carH = analysis.bbox.bottom - analysis.bbox.top + 1;
+    dampRimLight(
+      data, alpha, width, height,
+      Math.max(2, Math.round(carH * cfg.PAINT.rimWidthRatio)),
+      Math.max(8, Math.round(carH * cfg.PAINT.rimPaintRatio)),
+      cfg.PAINT.rimStrength, cfg.PAINT.rimMinExcess,
     );
     paintSmoothed = attenuateReflectionStructure(
       data, alpha, weights, width, height,

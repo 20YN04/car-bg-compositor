@@ -324,3 +324,106 @@ export function attenuateReflectionStructure(
   }
   return touched;
 }
+
+/**
+ * Het randlicht van de oude omgeving dempen.
+ *
+ * Een auto die buiten staat vangt de hele hemel op zijn daklijst, schouderlijn
+ * en dorpel: een lichte lijn die het silhouet volgt. In een studio vangt die
+ * lijn alleen het stuk wand erachter. Gemeten op de referentie van de live
+ * listing steekt die lijn 28 niveaus boven de lak uit; bij ons 89 en 64. Een
+ * lichte lijn die de contour volgt verraadt de vorm van het oude licht, en dat
+ * is een van de sterkste aanwijzingen dat een auto ergens anders vandaan komt.
+ *
+ * Hij hoort er niet helemaal uit — de referentie heeft hem ook, alleen zwakker.
+ *
+ * `compressHighlights` komt er niet bij: die knie ligt op 200 en schuift mee
+ * met de autohelderheid, terwijl deze lijn op een zwarte auto rond 150 piekt.
+ *
+ * Twee dingen die een eerdere poging lieten mislukken en hier expliciet anders
+ * zijn opgelost:
+ *
+ *   de band was te smal. De lijn beslaat op bronresolutie zo'n 7 tot 10 px,
+ *   dus een band van 5 raakte alleen de buitenste rand ervan. Breedte wordt nu
+ *   afgeleid van de autohoogte, zodat hij met het beeld meeschaalt.
+ *
+ *   het lakniveau werd over een straal gemeten die de lijn zelf bevatte,
+ *   waardoor het niveau omhoog werd getrokken en het overschot verdween. De
+ *   straal is nu ruim, en gemaskeerd (som van luminantie maal masker, gedeeld
+ *   door som van het masker) zodat de transparante buitenkant niet meetelt.
+ *
+ * Retourneert het aantal aangepaste pixels.
+ */
+export function dampRimLight(
+  rgba: Buffer,
+  alpha: Uint8Array,
+  width: number,
+  height: number,
+  rimWidth: number,
+  paintRadius: number,
+  strength: number,
+  minExcess: number,
+): number {
+  if (strength <= 0 || rimWidth < 1) return 0;
+  const n = width * height;
+  const lum = luminanceMap(rgba, n);
+  const mask = new Float32Array(n);
+  const masked = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const a = (alpha[i] ?? 0) / 255;
+    mask[i] = a;
+    masked[i] = (lum[i] ?? 0) * a;
+  }
+  // afstand tot de rand, benaderd met een blur van het masker: diep binnen de
+  // auto is die 1, pal op de rand ongeveer 0,5
+  const near = boxBlur(mask, width, height, rimWidth);
+  // Het lakniveau meten ZONDER de randband. Anders zit de lichte lijn in zijn
+  // eigen referentie: gemeten op een uitgebeten daklijn (luminantie 255) kwam
+  // het niveau daardoor op ~200 uit en bleef er van het overschot niets over.
+  const body = new Float32Array(n);
+  const bodyLum = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const band = Math.min(1, Math.max(0, (1 - (near[i] ?? 1)) / 0.5));
+    const w = (mask[i] ?? 0) * (1 - band);
+    body[i] = w;
+    bodyLum[i] = (lum[i] ?? 0) * w;
+  }
+  const wSum = boxBlur(body, width, height, paintRadius);
+  const vSum = boxBlur(bodyLum, width, height, paintRadius);
+  // Vangnet: de mediaan van de carrosserie buiten de band. Bij een uitgebeten
+  // daklijn (luminantie 255 over een band van 18 px) is zelfs een lokaal
+  // niveau dat de band uitsluit nog te hoog, want de hele omgeving daar is
+  // uitgebeten. De mediaan van de rest van de auto is dan de eerlijke
+  // schatting van "wat is dit voor lak".
+  const bodyVals: number[] = [];
+  for (let i = 0; i < n; i++) {
+    if ((body[i] ?? 0) > 0.9) bodyVals.push(lum[i] ?? 0);
+  }
+  bodyVals.sort((a, b) => a - b);
+  const bodyMedian = bodyVals.length > 0
+    ? (bodyVals[Math.floor(bodyVals.length / 2)] ?? 0)
+    : 0;
+
+  let touched = 0;
+  for (let i = 0; i < n; i++) {
+    const a = (alpha[i] ?? 0) / 255;
+    if (a <= 0.02) continue;
+    // 0 diep binnen de auto, 1 op de rand
+    const band = Math.min(1, Math.max(0, (1 - (near[i] ?? 1)) / 0.5));
+    if (band <= 0.02) continue;
+    const denom = wSum[i] ?? 0;
+    if (denom < 1e-3) continue;
+    // de laagste van de twee: een lokaal niveau dat door uitgebeten omgeving
+    // omhoog is getrokken mag het overschot niet wegpoetsen
+    const level = Math.min((vSum[i] ?? 0) / denom, bodyMedian + 30);
+    const excess = (lum[i] ?? 0) - level - minExcess;
+    if (excess <= 0) continue;
+    const drop = strength * band * a * excess;
+    const p = i * 4;
+    rgba[p] = Math.max(0, Math.min(255, Math.round((rgba[p] ?? 0) - drop)));
+    rgba[p + 1] = Math.max(0, Math.min(255, Math.round((rgba[p + 1] ?? 0) - drop)));
+    rgba[p + 2] = Math.max(0, Math.min(255, Math.round((rgba[p + 2] ?? 0) - drop)));
+    touched++;
+  }
+  return touched;
+}

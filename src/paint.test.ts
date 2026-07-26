@@ -4,6 +4,7 @@ import {
   analyzePaint,
   dampEnvironmentReflections,
   attenuateReflectionStructure,
+  dampRimLight,
   hueDistance,
   localContrastMap,
 } from "./paint.js";
@@ -278,5 +279,90 @@ describe("attenuateReflectionStructure", () => {
     const before = Buffer.from(p.rgba);
     expect(run(p, 0)).toBe(0);
     expect(p.rgba.equals(before)).toBe(true);
+  });
+});
+
+describe("dampRimLight", () => {
+  const W = 240;
+  const H = 160;
+
+  /**
+   * Een donkere auto met twee lichte plekken die er wezenlijk anders bij staan:
+   *
+   *   randband    een uitgebeten strook langs de bovenrand van het silhouet —
+   *               de hemel die de daklijn onder scherende hoek spiegelt.
+   *               Gemeten op de bron is dat geen dunne lijn maar een band van
+   *               zo'n 18 px die tot 255 doorloopt. Die hoort gedempt.
+   *   spiegeling  een even lichte plek midden op het paneel. Die hoort te
+   *               blijven: in het midden van een paneel is licht gewoon lak.
+   */
+  function auto() {
+    const rgba = Buffer.alloc(W * H * 4);
+    const alpha = new Uint8Array(W * H);
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const i = y * W + x;
+        const inCar = x >= 40 && x < 200 && y >= 40 && y < 130;
+        alpha[i] = inCar ? 255 : 0;
+        if (!inCar) continue;
+        const band = y < 52 ? 255 : 50;
+        const spiegel = x >= 110 && x < 130 && y >= 85 && y < 95 ? 255 : band;
+        rgba[i * 4] = spiegel;
+        rgba[i * 4 + 1] = spiegel;
+        rgba[i * 4 + 2] = spiegel;
+        rgba[i * 4 + 3] = 255;
+      }
+    }
+    return { rgba, alpha };
+  }
+
+  const v = (b: Buffer, x: number, y: number) => b[(y * W + x) * 4]!;
+  // De bandweging loopt lineair van 1 op de rand naar 0 op diepte = straal.
+  // De straal moet dus ruimer zijn dan de band die je wilt raken; met 8 op een
+  // band van 12 px blijft het binnenste deel bijna onaangeroerd.
+  const run = (a: { rgba: Buffer; alpha: Uint8Array }, kracht = 0.8) =>
+    dampRimLight(a.rgba, a.alpha, W, H, 18, 30, kracht, 8);
+
+  it("dempt de uitgebeten band langs de silhouetrand", () => {
+    const a = auto();
+    expect(v(a.rgba, 120, 45)).toBe(255);
+    run(a);
+    const na = v(a.rgba, 120, 45);
+    // fors omlaag: minstens 70 niveaus van de 205 die de band boven de lak uit
+    // stak
+    expect(255 - na).toBeGreaterThan(70);
+    // maar niet tot op de lak. De referentie houdt zelf ook een randlicht van
+    // ~28 niveaus; een auto zonder enige randglans leest als plat.
+    expect(na).toBeGreaterThan(60);
+  });
+
+  it("laat een spiegeling midden op het paneel staan", () => {
+    const a = auto();
+    run(a);
+    // de bandweging is nul in het midden, dus daar mag niets gebeuren
+    expect(v(a.rgba, 120, 90)).toBe(255);
+  });
+
+  it("laat de vlakke lak met rust", () => {
+    const a = auto();
+    run(a);
+    expect(v(a.rgba, 70, 100)).toBe(50);
+    expect(v(a.rgba, 180, 120)).toBe(50);
+  });
+
+  it("raakt niets buiten het masker", () => {
+    const a = auto();
+    const voor = Buffer.from(a.rgba);
+    run(a);
+    for (const [x, y] of [[5, 5], [230, 150], [120, 10]] as const) {
+      expect(v(a.rgba, x, y)).toBe(voor[(y * W + x) * 4]!);
+    }
+  });
+
+  it("doet niets bij sterkte nul", () => {
+    const a = auto();
+    const voor = Buffer.from(a.rgba);
+    expect(run(a, 0)).toBe(0);
+    expect(a.rgba.equals(voor)).toBe(true);
   });
 });
