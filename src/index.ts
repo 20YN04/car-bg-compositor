@@ -895,12 +895,25 @@ async function processImage(
             .blur(cfg.WINDOWS.greenhouseFineRadius)
             .raw()
             .toBuffer();
+          // per-kanaal geblurd: het eigen verloop van het glas, in kleur.
+          // Alleen de luminantie meegeven zou de mengstap kleurloos maken.
+          // ensureAlpha na de blur: dan heeft deze buffer dezelfde stride van
+          // vier kanalen als `data`, en kan applyGreenhouse beide met dezelfde
+          // index lezen. Een 3-kanaals buffer met een 4-kanaals index gaf een
+          // jaloezie-patroon over het glas.
+          const lowColour = await sharp(data, { raw: { width, height, channels: 4 } })
+            .removeAlpha()
+            .blur(cfg.WINDOWS.greenhouseLowFreqRadius)
+            .ensureAlpha()
+            .raw()
+            .toBuffer();
           windowInfo.tintedPixels = applyGreenhouse(
             data, alpha, windowMask,
             new Uint8Array(lowRaw.buffer, lowRaw.byteOffset, width * height),
             width, height, pm, cfg.WINDOWS, cfg.WINDOWS.greenhouseDetail,
             new Uint8Array(fineRaw.buffer, fineRaw.byteOffset, width * height),
             cfg.WINDOWS.greenhouseMidKeep,
+            lowColour, cfg.WINDOWS.plateBlend,
           );
         } else {
           windowInfo.tintedPixels = applyWindowTint(

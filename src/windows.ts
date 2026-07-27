@@ -119,6 +119,8 @@ export function applyGreenhouse(
   detailKeep: number,
   fineFreq: Uint8Array | null = null,
   midKeep = 1,
+  lowRgb: Buffer | null = null,
+  plateBlend = 1,
 ): number {
   let changed = 0;
   // waar de plate op landt: de reflectiekleur verdonkerd richting de tint,
@@ -160,11 +162,31 @@ export function applyGreenhouse(
       detail = (lum - (lowFreq[i] ?? 0)) * detailKeep;
     }
 
-    // nieuwe waarde = vervangen lage frequentie + behouden hoge frequentie,
+    // De lage frequentie MENGEN, niet vervangen.
+    //
+    // Vervangen door één plaatkleur haalt alle ruimtelijke variatie uit het
+    // glas — de lichte bovenkant, de donkere onderrand, de schaduw van de
+    // stijl — en dan leest de ruit als een overgeschilderd paneel in plaats
+    // van als glas. Op een auto die binnen is gefotografeerd, waar het glas
+    // een schone showroom spiegelt en je het interieur ziet, sloopte dat
+    // beeld dat helemaal niets mankeerde.
+    //
+    // Met plateBlend < 1 blijft het eigen verloop van het glas staan en
+    // schuift alleen de kleur op richting wat de studio daar zou spiegelen:
+    // de groenzweem van bladerdek verdwijnt, de diepte blijft.
+    const ownR = lowRgb ? (lowRgb[p] ?? 0) : baseR;
+    const ownG = lowRgb ? (lowRgb[p + 1] ?? 0) : baseG;
+    const ownB = lowRgb ? (lowRgb[p + 2] ?? 0) : baseB;
+    const k = lowRgb ? plateBlend : 1;
+    const mixR = ownR * (1 - k) + baseR * k;
+    const mixG = ownG * (1 - k) + baseG * k;
+    const mixB = ownB * (1 - k) + baseB * k;
+
+    // nieuwe waarde = gemengde lage frequentie + behouden hoge frequentie,
     // gewogen met het maskerverloop zodat de raamrand niet hard afsnijdt
-    rgba[p] = Math.max(0, Math.min(255, Math.round(r * (1 - m) + (baseR + detail) * m)));
-    rgba[p + 1] = Math.max(0, Math.min(255, Math.round(g * (1 - m) + (baseG + detail) * m)));
-    rgba[p + 2] = Math.max(0, Math.min(255, Math.round(b * (1 - m) + (baseB + detail) * m)));
+    rgba[p] = Math.max(0, Math.min(255, Math.round(r * (1 - m) + (mixR + detail) * m)));
+    rgba[p + 1] = Math.max(0, Math.min(255, Math.round(g * (1 - m) + (mixG + detail) * m)));
+    rgba[p + 2] = Math.max(0, Math.min(255, Math.round(b * (1 - m) + (mixB + detail) * m)));
     if (m > 0.05) changed++;
   }
   return changed;

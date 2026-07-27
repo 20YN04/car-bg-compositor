@@ -174,6 +174,13 @@ export interface WindowsConfig {
    * waarop gespiegeld bladerdek zit; op 1 gedraagt de stap zich als voorheen.
    */
   greenhouseMidKeep: number;
+  /**
+   * Hoeveel de lage frequentie van het glas naar de plaatkleur schuift (0..1).
+   * Op 1 wordt hij vervángen en verliest de ruit al zijn verloop — dan leest
+   * hij als een overgeschilderd paneel. Lager laat de diepte staan en haalt
+   * alleen de kleurzweem van de oude omgeving eruit.
+   */
+  plateBlend: number;
 }
 
 export type PlateMode = "blur" | "replace" | "off";
@@ -1244,6 +1251,7 @@ export const defaultConfig: Config = {
     greenhouseLowFreqRadius: 12,
     greenhouseFineRadius: 2,
     greenhouseMidKeep: 0.25,
+    plateBlend: 0.2,
   },
   /**
    * SCHATTING — de prijs per BiRefNet-call staat niet in de publieke docs.
