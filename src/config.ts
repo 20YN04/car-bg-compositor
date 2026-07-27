@@ -429,11 +429,10 @@ export interface RelightConfig {
    * (studio 1248, showroom 1920) en dezelfde pixelstraal zou daar een andere
    * scheiding leggen.
    *
-   * Gemeten op de Taycan: bij 0,019 (24 px op 1248) bleven er vegen op het dak
-   * en de flank staan — dat is het model dat zijn carrosserielijnen nét naast
-   * de onze legt, en die verschuiving is te fijn om als belichting door te
-   * gaan. Bij 0,064 middelt dat weg en zakt de begrensde fractie van 24% naar
-   * 4%. Ruim boven badges, velgspaken en panelnaden, dus de identiteit blijft.
+   * Gemeten op de Taycan, met het glas onaangeroerd: 0,020 gaf zichtbare
+   * vegen in de zijruit (begrensde fractie 22,6%), 0,035 was schoon (15,1%) en
+   * 0,064 nog voorzichtiger (4,3%). 0,035 is het optimum — de meeste
+   * belichting van het model die er nog schoon doorheen komt.
    */
   radiusRatio: number;
   /**
@@ -454,6 +453,9 @@ export interface RelightConfig {
    * Fractie van de maskerpixels die tegen die grens mag aanlopen. Daarboven
    * lag de gegenereerde auto niet op de onze — ander model, andere kleur,
    * verschoven plaatsing — en is dit geen belichting meer.
+   *
+   * Op 0,18 gekalibreerd tegen wat je ziet: bij 22,6% stonden er bruine en
+   * roze vegen in de zijruit, bij 15,1% was het beeld schoon.
    */
   maxClipped: number;
 }
@@ -1153,9 +1155,9 @@ export const defaultConfig: Config = {
       enabled: true,
       showCar: true,
       carThreshold: 90,
-      radiusRatio: 0.064,
+      radiusRatio: 0.035,
       maxShift: 36,
-      maxClipped: 0.25,
+      maxClipped: 0.18,
     },
     seed: 20260724,
     maxAttempts: 3,
@@ -1235,7 +1237,19 @@ export const defaultConfig: Config = {
     rear34: { spanMeters: 4.6 },
   },
   WINDOWS: {
-    enabled: true,
+    // Uit: het glas blijft zoals het gefotografeerd is.
+    //
+    // Elke ingreep die we hier probeerden maakte het slechter. Tinten liet de
+    // omgeving er doorheen schemeren, alleen donkerder. Vervangen van de lage
+    // frequentie maakte er een overgeschilderd paneel van. Mengen was beter
+    // maar nog steeds een correctie op iets wat er meestal niet is: bij een
+    // auto die binnen is gefotografeerd spiegelt het glas gewoon een schone
+    // ruimte en zie je het interieur.
+    //
+    // Scheelt bovendien de SAM 3-call voor de ruiten: $0,016 -> $0,011 per
+    // beeld. De reflecties in het glas gaan mee in de relight-stap, waar ze
+    // thuishoren.
+    enabled: false,
     // "car window" en varianten leveren bij deze detector de héle auto terug
     // (gemeten: 1387×469 op een auto van 1387×469), waarna de plausibiliteits-
     // filter ze terecht weggooit en alleen de voorruit overblijft. De achterste
