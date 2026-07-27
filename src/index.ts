@@ -102,6 +102,8 @@ interface CliOptions {
   groundYOverride?: number; // --ground-y wint van het BackgroundProfile
   carWidthOverride?: number; // --car-width (ratio) wint van floorScaleRef
   preset?: keyof Config["PRESETS"]; // fase 4: per-hoek kadrering
+  /** Merk, model en uitvoering uit de listing, voor de relight-prompt. */
+  vehicle?: string;
 }
 
 const MASK_PROMPT =
@@ -132,6 +134,7 @@ function parseCli(): { cfg: Config; cli: CliOptions } {
   const { values } = parseArgs({
     options: {
       file: { type: "string" },
+      vehicle: { type: "string" },
       bg: { type: "string" },
       "ground-y": { type: "string" },
       "car-width": { type: "string" },
@@ -156,6 +159,9 @@ function parseCli(): { cfg: Config; cli: CliOptions } {
     },
   });
 
+  // Wat voor auto dit is, uit de listing. Wordt aan de relight-prompt
+  // voorgevoegd zodat het model niet hoeft te raden welk model het tekent.
+  const vehicle = typeof values.vehicle === "string" ? values.vehicle.trim() : "";
   const cfg: Config = structuredClone(defaultConfig);
   // het uitvoerdoel eerst: dat zet canvas, achtergrond en de plate-specifieke
   // nabewerkingen in één keer, en de losse vlaggen hieronder kunnen er daarna
@@ -243,6 +249,7 @@ function parseCli(): { cfg: Config; cli: CliOptions } {
       carWidthOverride:
         values["car-width"] !== undefined ? cfg.CAR_WIDTH_RATIO : undefined,
       preset: values.preset as CliOptions["preset"],
+      vehicle: vehicle || undefined,
     },
   };
 }
@@ -1309,7 +1316,9 @@ async function processImage(
                 // een zwart vlak terug en dus niets om over te nemen
                 showCar ? mathComposite : fillInput,
                 showCar
-                  ? cfg.GEMINI.relightPrompt
+                  ? (cli.vehicle
+                      ? `${cfg.GEMINI.vehiclePrefix}${cli.vehicle}. `
+                      : "") + cfg.GEMINI.relightPrompt
                   : cfg.GEMINI.maskPrefix + cfg.GENBG.prompt,
                 cfg.GEMINI, CACHE_DIR, cli.useCache, cfg.GENBG.seed + attempt,
               )

@@ -536,6 +536,19 @@ export interface GeminiConfig {
   /** Prefix voor de GENBG-prompt: vertelt Gemini dat het zwarte silhouet een placeholder is. */
   maskPrefix: string;
   /**
+   * Voorvoegsel waarin staat welke auto dit is. De listing weet dat al —
+   * merk, model, uitvoering, bouwjaar, kleur — en dat doorgeven is gratis
+   * voorkennis voor het model. Zonder die kennis moet het uit de pixels raden
+   * wat voor auto het is, en dan tekent het het gemiddelde van wat er in zijn
+   * training zat: verkeerde velgen, verkeerde bumper.
+   *
+   * Het blijft een prior, geen garantie. Een model dat weet dat het een
+   * Taycan Sport Turismo is, tekent nog steeds niet de uitvoering, de opties
+   * of de schade van dít exemplaar. Daarom blijft de frequentiesplitsing
+   * eronder liggen: het detail komt van ons, het licht van het model.
+   */
+  vehiclePrefix: string;
+  /**
    * Prompt voor de relight-route: het model krijgt het mathematische composiet
    * mét de auto en hoeft alleen te belichten, niet te verzinnen.
    *
@@ -1187,6 +1200,7 @@ export const defaultConfig: Config = {
      * een zwart gemaskeerde auto-silhouet — zonder deze instructie vult
      * Gemini dat zwarte gat op met een zelf verzonnen auto.
      */
+    vehiclePrefix: "The car in this image is a ",
     relightPrompt:
       "Relight this car so it looks physically present in this studio. " +
       "Add the light the room casts on it: the floor bouncing up into the " +
