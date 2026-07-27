@@ -1046,7 +1046,7 @@ export const defaultConfig: Config = {
   },
   HARMONIZE: {
     enabled: true,
-    strength: 0.35,
+    strength: 0.15,
     maxGain: 0.12,
     setConsistent: true,
   },

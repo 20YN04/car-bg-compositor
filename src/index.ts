@@ -632,7 +632,23 @@ async function processImage(
     cfg,
     cfg.ROUTING.minExteriorSignals,
   );
-  const compositeThisImage = !cfg.ROUTING.enabled || classification.isExterior;
+  // Een detailopname is geen exterieurfoto, hoe herkenbaar de auto er ook op
+  // staat. De routeringspoort telt exterieursignalen en een close-up van een
+  // koplamp of spiegel haalt die gewoon: het ís een auto.
+  //
+  // Het onderscheid dat wél werkt is de maskerfractie. Een listingfoto heeft
+  // altijd lucht om de auto; gemeten op de Van Mossel-set vulde de koplamp
+  // 75,4% van het beeld en de spiegel 88,6%, terwijl geen van de dertien
+  // Taycan-exterieurfoto's boven de drempel kwam. Zonder deze poort belandde
+  // een uitgesneden koplamp op de studiovloer, compleet met spiegeling.
+  //
+  // Zulke foto's krijgen nog wel de kleurcorrectie, de grade en de branding,
+  // zodat de listing als geheel consistent blijft.
+  const maskFraction =
+    analysis.area / Math.max(1, width * height);
+  const detailShot = maskFraction > cfg.QA.maxMaskArea;
+  const compositeThisImage =
+    (!cfg.ROUTING.enabled || classification.isExterior) && !detailShot;
 
   // wielposities via detectie: contour-geometrie mist verre wielen die
   // nauwelijks onder de onderbodemlijn uitsteken (RVV-achterwiel)
