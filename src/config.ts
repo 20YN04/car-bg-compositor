@@ -136,7 +136,20 @@ export interface MatteConfig {
   edgeHigh: number; // alfa ≥ high → dekkend
 }
 
+export type WindowsMode = "protect" | "greenhouse" | "tint";
+
 export interface WindowsConfig {
+  /**
+   * Wat er met het glas gebeurt.
+   *
+   * protect (default) — het masker wordt alleen gebruikt om het glas áf te
+   * schermen van de lakstappen. Die draaien op alle autopixels en maakten de
+   * voorruit melkig en vlak: reflecties weggehaald, structuur gladgestreken.
+   * Glas hoort eruit te zien zoals het gefotografeerd is.
+   *
+   * greenhouse / tint — de oude gedragingen, die het glas wél bewerken.
+   */
+  mode: WindowsMode;
   /**
    * Ruiten donker tinten: door de ramen blijft anders de oorspronkelijke
    * omgeving zichtbaar (bomen, hek), wat vloekt met de nieuwe achtergrond.
@@ -1237,7 +1250,8 @@ export const defaultConfig: Config = {
     rear34: { spanMeters: 4.6 },
   },
   WINDOWS: {
-    // Uit: het glas blijft zoals het gefotografeerd is.
+    // Aan, maar in modus "protect": het masker dient om het glas af te
+    // schermen van de lakstappen, niet om het te bewerken.
     //
     // Elke ingreep die we hier probeerden maakte het slechter. Tinten liet de
     // omgeving er doorheen schemeren, alleen donkerder. Vervangen van de lage
@@ -1246,10 +1260,11 @@ export const defaultConfig: Config = {
     // auto die binnen is gefotografeerd spiegelt het glas gewoon een schone
     // ruimte en zie je het interieur.
     //
-    // Scheelt bovendien de SAM 3-call voor de ruiten: $0,016 -> $0,011 per
-    // beeld. De reflecties in het glas gaan mee in de relight-stap, waar ze
-    // thuishoren.
-    enabled: false,
+    // De SAM 3-call blijft dus nodig ($0,005), maar niet om het glas te
+    // veranderen — om het te sparen. Gemeten maakten de lakstappen de
+    // voorruit melkig: reflecties eruit, structuur gladgestreken.
+    enabled: true,
+    mode: "protect",
     // "car window" en varianten leveren bij deze detector de héle auto terug
     // (gemeten: 1387×469 op een auto van 1387×469), waarna de plausibiliteits-
     // filter ze terecht weggooit en alleen de voorruit overblijft. De achterste

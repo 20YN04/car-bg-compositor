@@ -779,61 +779,13 @@ async function processImage(
       }
     }
   }
-  // fase 3 — harmonisatie: buitenlicht-zweem subtiel richting de
-  // achtergrondtoon trekken vóór de ruit-tint
-  let harmonizeGains: { r: number; g: number; b: number } | null = null;
-  if (cfg.HARMONIZE.enabled && analysis.bbox) {
-    const bg = await backgroundMeans(backgroundPath, cfg.CANVAS.width, cfg.CANVAS.height);
-    const car = cutoutMeans(data, alpha, width, height);
-    harmonizeGains = harmonizeColors(
-      data, alpha, width, height, car, bg, cfg.HARMONIZE, setReference,
-    );
-  }
-  // omgevingsreflecties in de lak dempen: glanzende lak spiegelt de plek waar
-  // de foto genomen is, dus een auto die onder bomen stond houdt een bomenrij
-  // op de motorkap. Verzadiging naar neutraal, helderheid ongemoeid — de vorm
-  // blijft, de kleur verdwijnt. Achterlichten en badges zijn beschermd.
-  let paintDamped = 0;
-  let paintSmoothed = 0;
-  // op functieniveau: de waarde ontstaat in de scène-stap maar wordt in
-  // run.jsonl geschreven, buiten dat blok
-  let relightStats: { meanShift: number; maxShift: number; clipped: number } | null = null;
-  let alignBox: { hun: unknown; ons: unknown } | null = null;
-  if (cfg.PAINT.enabled && analysis.bbox) {
-    const stats = analyzePaint(data, alpha, width, height, cfg.PAINT);
-    // het gewicht per pixel bewaren: de tweede stap mag alleen aankomen waar
-    // deze stap de pixel al als omgeving heeft aangewezen
-    const weights = new Float32Array(width * height);
-    paintDamped = dampEnvironmentReflections(
-      data, alpha, width, height, stats, cfg.PAINT, weights,
-    );
-    // randlicht: de structuurdemping laat de helderheid met rust, dus de
-    // lichte lijn langs het silhouet staat er dan nog. Maten schalen mee met
-    // de autohoogte zodat ze niet aan één bronresolutie vastzitten.
-    const carH = analysis.bbox.bottom - analysis.bbox.top + 1;
-    dampRimLight(
-      data, alpha, width, height,
-      Math.max(2, Math.round(carH * cfg.PAINT.rimWidthRatio)),
-      Math.max(8, Math.round(carH * cfg.PAINT.rimPaintRatio)),
-      cfg.PAINT.rimStrength, cfg.PAINT.rimMinExcess,
-    );
-    paintSmoothed = attenuateReflectionStructure(
-      data, alpha, weights, width, height,
-      cfg.PAINT.structureFineRadius, cfg.PAINT.structureCoarseRadius,
-      cfg.PAINT.structureStrength,
-    );
-  }
-
-  // specular-compressie: felle reflecties van de oorspronkelijke tl-balken/
-  // spots in de lak dempen zodat ze niet vloeken met de rustige studio-look
-  let highlightPixels = 0;
-  if (cfg.HIGHLIGHTS.enabled && analysis.bbox) {
-    highlightPixels = compressHighlights(data, alpha, width, height, cfg.HIGHLIGHTS);
-  }
-
   // ruiten donker tinten zodat de oorspronkelijke omgeving niet door het
   // glas zichtbaar blijft (detectie + SAM2-masker + wiskundige verdonkering)
   const windowInfo = { boxes: 0, tintedPixels: 0 };
+  // Het raammasker wordt hier alleen opgebouwd. In modus "protect" wordt het
+  // glas niet bewerkt maar juist afgeschermd van de lakstappen: die draaien op
+  // álle autopixels en maakten de voorruit melkig en vlak.
+  let glassMask: Uint8Array | null = null;
   if (cfg.WINDOWS.enabled && cli.ai && analysis.bbox) {
     try {
 
@@ -875,7 +827,8 @@ async function processImage(
         const windowMask = new Uint8Array(
           maskRaw.buffer, maskRaw.byteOffset, width * height,
         );
-        if (cfg.WINDOWS.greenhouse) {
+        glassMask = windowMask;
+        if (cfg.WINDOWS.mode !== "protect" && cfg.WINDOWS.greenhouse) {
           // wat zou de studioplate hier spiegelen? De gemiddelde plate-kleur
           // is een goede benadering: de wand is een egaal verloop, dus een
           // ruit die hem spiegelt ziet vrijwel één toon
@@ -915,7 +868,7 @@ async function processImage(
             cfg.WINDOWS.greenhouseMidKeep,
             lowColour, cfg.WINDOWS.plateBlend,
           );
-        } else {
+        } else if (cfg.WINDOWS.mode !== "protect") {
           windowInfo.tintedPixels = applyWindowTint(
             data, alpha, windowMask, width, height, cfg.WINDOWS,
           );
@@ -929,6 +882,71 @@ async function processImage(
       );
     }
   }
+
+  // fase 3 — harmonisatie: buitenlicht-zweem subtiel richting de
+  // achtergrondtoon trekken vóór de ruit-tint
+  let harmonizeGains: { r: number; g: number; b: number } | null = null;
+  if (cfg.HARMONIZE.enabled && analysis.bbox) {
+    const bg = await backgroundMeans(backgroundPath, cfg.CANVAS.width, cfg.CANVAS.height);
+    const car = cutoutMeans(data, alpha, width, height);
+    harmonizeGains = harmonizeColors(
+      data, alpha, width, height, car, bg, cfg.HARMONIZE, setReference,
+    );
+  }
+  // omgevingsreflecties in de lak dempen: glanzende lak spiegelt de plek waar
+  // de foto genomen is, dus een auto die onder bomen stond houdt een bomenrij
+  // op de motorkap. Verzadiging naar neutraal, helderheid ongemoeid — de vorm
+  // blijft, de kleur verdwijnt. Achterlichten en badges zijn beschermd.
+  // Alfa zonder glas: de lakstappen zijn voor lak. Op een ruit halen ze de
+  // reflecties eruit en blijft er een melkig vlak over — precies wat je van
+  // glas juist niet wilt.
+  const paintAlpha = glassMask
+    ? (() => {
+        const a = new Uint8Array(alpha);
+        for (let i = 0; i < a.length; i++) {
+          if ((glassMask[i] ?? 0) > 40) a[i] = 0;
+        }
+        return a;
+      })()
+    : alpha;
+  let paintDamped = 0;
+  let paintSmoothed = 0;
+  // op functieniveau: de waarde ontstaat in de scène-stap maar wordt in
+  // run.jsonl geschreven, buiten dat blok
+  let relightStats: { meanShift: number; maxShift: number; clipped: number } | null = null;
+  let alignBox: { hun: unknown; ons: unknown } | null = null;
+  if (cfg.PAINT.enabled && analysis.bbox) {
+    const stats = analyzePaint(data, paintAlpha, width, height, cfg.PAINT);
+    // het gewicht per pixel bewaren: de tweede stap mag alleen aankomen waar
+    // deze stap de pixel al als omgeving heeft aangewezen
+    const weights = new Float32Array(width * height);
+    paintDamped = dampEnvironmentReflections(
+      data, paintAlpha, width, height, stats, cfg.PAINT, weights,
+    );
+    // randlicht: de structuurdemping laat de helderheid met rust, dus de
+    // lichte lijn langs het silhouet staat er dan nog. Maten schalen mee met
+    // de autohoogte zodat ze niet aan één bronresolutie vastzitten.
+    const carH = analysis.bbox.bottom - analysis.bbox.top + 1;
+    dampRimLight(
+      data, paintAlpha, width, height,
+      Math.max(2, Math.round(carH * cfg.PAINT.rimWidthRatio)),
+      Math.max(8, Math.round(carH * cfg.PAINT.rimPaintRatio)),
+      cfg.PAINT.rimStrength, cfg.PAINT.rimMinExcess,
+    );
+    paintSmoothed = attenuateReflectionStructure(
+      data, paintAlpha, weights, width, height,
+      cfg.PAINT.structureFineRadius, cfg.PAINT.structureCoarseRadius,
+      cfg.PAINT.structureStrength,
+    );
+  }
+
+  // specular-compressie: felle reflecties van de oorspronkelijke tl-balken/
+  // spots in de lak dempen zodat ze niet vloeken met de rustige studio-look
+  let highlightPixels = 0;
+  if (cfg.HIGHLIGHTS.enabled && analysis.bbox) {
+    highlightPixels = compressHighlights(data, paintAlpha, width, height, cfg.HIGHLIGHTS);
+  }
+
 
   // nummerplaten detecteren en mappen naar canvascoördinaten
   let plates: CanvasRect[] = [];
