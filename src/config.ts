@@ -71,6 +71,13 @@ export interface SynthConfig {
    * keurt samengedrukte of uitgerekte koetsen af.
    */
   anchorPath: string;
+  /**
+   * Statische lege studio (eenmalig uit het anker gedestilleerd,
+   * 2026-07-30). Na acceptatie wordt de achtergrond van elke kandidaat
+   * deterministisch door déze plate vervangen — de achtergrond kan dus per
+   * definitie niet meer per generatie verschillen.
+   */
+  backgroundPlatePath: string;
 }
 
 /**
@@ -121,6 +128,7 @@ export const defaultConfig: Config = {
     maxLumaRatio: 1.15,
     maxTintDelta: 0.05,
     anchorPath: "assets/thumbnail-composition-anchor.jpg",
+    backgroundPlatePath: "assets/studio-empty.jpg",
   },
   PLATE: {
     assetPath: "assets/carredo-plate.png",

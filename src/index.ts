@@ -16,6 +16,7 @@ import {
 } from "./identify.js";
 import { getCutout, maskStats, noteFalFailure } from "./mask.js";
 import { cutoutMeans, medianMeans, type ChannelMeans } from "./measure.js";
+import { replaceBackground } from "./background.js";
 import { mountPlate } from "./plate.js";
 
 const IN_DIR = "./in";
@@ -545,7 +546,29 @@ async function main(): Promise<void> {
   // de plaat zit sinds 2026-07-30 ín de generatie (asset als referentie +
   // eigen poort); de deterministische naderhand-montage bestaat alleen nog
   // als handmatige --mount-plate voor beelden zonder plaat
-  const accepted = await synthesizeAngle(cli.synth, cfg, cli);
+  let accepted = await synthesizeAngle(cli.synth, cfg, cli);
+
+  // de achtergrond komt nooit uit het model: na acceptatie wordt hij
+  // vervangen door de statische plate (auto + schaduw blijven uit de
+  // kandidaat). Faalt de vervanging, dan publiceren we niet half — de
+  // kandidaat gaat er ongewijzigd door, met melding.
+  if (existsSync(cfg.SYNTH.backgroundPlatePath)) {
+    try {
+      const accPath = path.join(CACHE_DIR, "accepted-tmp.jpg");
+      await writeFile(accPath, accepted);
+      const cutout = await getCutout(accPath, CACHE_DIR, cfg.FAL, cfg.MATTE, cli.useCache);
+      accepted = await replaceBackground(accepted, cutout, cfg.SYNTH.backgroundPlatePath);
+      await rm(accPath, { force: true });
+    } catch (err) {
+      console.warn(
+        `  ⚠ achtergrondvervanging mislukt (${err instanceof Error ? err.message : err}) — kandidaat ongewijzigd gepubliceerd`,
+      );
+    }
+  } else {
+    console.warn(
+      `  ⚠ studio-plate ontbreekt (${cfg.SYNTH.backgroundPlatePath}) — achtergrond blijft uit het model komen`,
+    );
+  }
 
   // het goedgekeurde studiobeeld ÍS het eindresultaat (besluit 2026-07-30):
   // geen hercompositing, plaathouder blijft zoals gegenereerd. Publiceren =
