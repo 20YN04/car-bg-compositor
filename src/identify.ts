@@ -1,6 +1,6 @@
 import type { GeminiConfig, SynthConfig } from "./config.js";
 import { geminiText, type ImagePart } from "./gemini.js";
-import type { ChannelMeans } from "./harmonize.js";
+import type { ChannelMeans } from "./measure.js";
 
 /**
  * Exacte voertuigidentificatie uit de hele fotoset.

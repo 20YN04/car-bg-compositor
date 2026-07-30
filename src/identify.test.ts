@@ -61,7 +61,14 @@ describe("paintCorrectionGains", () => {
 });
 
 describe("paintDeviation", () => {
-  const cfg = { minLumaRatio: 0.85, maxLumaRatio: 1.15, maxTintDelta: 0.05, anchorPath: "" };
+  const cfg = {
+    seed: 1,
+    maxAttempts: 3,
+    minLumaRatio: 0.85,
+    maxLumaRatio: 1.15,
+    maxTintDelta: 0.05,
+    anchorPath: "",
+  };
   // ijkpunten gemeten op de EQE-set, 2026-07-30
   const bronMediaan = { r: 117, g: 120, b: 132 };
 

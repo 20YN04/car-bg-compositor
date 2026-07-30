@@ -1,9 +1,9 @@
 # AGENTS.md — car-bg-compositor
 
-Lokale test-tool voor achtergrondvervanging bij auto-verkoopfoto's (lokale
-rembg-masking + puur mathematische compositing met sharp op een vaste,
-gekalibreerde studioplate). Doel: bewijzen dat dit beter is dan generatieve
-modellen die velgen/badges hertekenen.
+Thumbnail-synthesizer voor auto-listings: per map dealerfoto's één
+gegenereerde catalogus-thumbnail (Gemini 3 Pro image), bewaakt door
+dimensie-, identiteits-, lak- en proportie-poorten. De oude deterministische
+compositing-pipeline staat onder de git-tag `composiet-pipeline-v1`.
 
 ## Git workflow (REQUIRED)
 
@@ -21,37 +21,33 @@ Hard rules:
 
 ## Verification (REQUIRED before commit)
 
-Dit is een CLI-beeldpipeline, geen frontend — browser-verify is hier niet van
-toepassing. In plaats daarvan:
+Dit is een CLI-beeldpipeline, geen frontend — browser-verify is hier niet
+van toepassing. In plaats daarvan:
 
 1. `pnpm typecheck` — moet clean zijn.
 2. `pnpm test` — alle unit tests groen (geen API-calls nodig).
-3. Bij wijzigingen aan masking/compositing/plaatsing: draai de pipeline op
-   minstens één echt beeld (`pnpm start --file <foo>.jpg`) en bekijk
-   `./out/` én `./debug/` (masker, bbox-overlay, `run.jsonl`) vóór commit.
-   Cache in `./cache/` maakt herhaald draaien gratis.
+3. Bij wijzigingen aan de synthese, prompts of poorten: draai
+   `pnpm start --synth <map>` op een echte auto-map en bekijk
+   `out/<map>/thumbnail.jpg` vóór commit. Cache in `./cache/` maakt
+   herhaald draaien goedkoop; een kopie van een bestaande map onder een
+   nieuwe naam is een gratis-tot-goedkope rooktest.
 
 Hard rules:
-- Claim nooit "tests groen, ship it" voor een wijziging aan de beeldpipeline
-  zonder één echte before/after in `./out/` bekeken te hebben.
-- Geen generatieve stappen toevoegen aan de compositing-pad — de kernbelofte
-  van deze tool is dat originele pixels (velgen, badges, koplampen) nooit
-  hertekend worden. Masking/AI mag alleen selecteren, nooit genereren.
-
-## Achtergrond-plates
-
-De achtergrond is een vaste plate in `./backgrounds/` (gitignored, dus lokaal
-asset). Elke plate hoort een entry in `BACKGROUND_PROFILES` te hebben, gekeyed
-op de **exacte bestandsnaam**; zonder match valt de plaatsing stil terug op
-`DEFAULT_PROFILE` — andere contactdiepte, schaal en reflectie. De pipeline
-waarschuwt daarvoor.
-
-Hard rule: hernoem een plate nooit zonder de key in `src/config.ts` mee te
-hernoemen.
+- Claim nooit "tests groen, ship it" voor een wijziging aan prompts of
+  poorten zonder één echt gegenereerd beeld bekeken te hebben.
+- **Een bestaande `out/<map>/thumbnail.jpg` is een goedgekeurd beeld en
+  wordt nooit verwijderd of vervangen zonder expliciete opdracht van
+  Yentl.** Hergenereren is non-deterministisch; de code weigert het al,
+  omzeil dat niet.
+- Versoepel de poorten (lakdrempels, proportie-check, dimensie-assert)
+  nooit om "een run te laten slagen" — een afkeuring is informatie, geen
+  bug. Drempels herijken mag alleen op gemeten data, met de meting in de
+  config-comment.
 
 ## Secrets
 
-`FAL_KEY` hoort in `.env` (gitignored). Nooit committen, nooit loggen. De
-default-pipeline draait zonder key; alleen de optionele fal-stappen
-(auto-detectie, ruit-tint, plaat-anonimisatie, AI-checks) hebben er een nodig
-en slaan zichzelf over met een waarschuwing als hij ontbreekt of ongeldig is.
+Keys horen in `.env` (gitignored), nooit committen, nooit loggen:
+
+- `GEMINI_NANO_BANANA_API_KEY` — verplicht voor de hele flow.
+- `FAL_KEY` — alleen voor de lakmeting (fal-rmbg matte). Zonder key:
+  `--matte rembg` draait lokaal en gratis.
