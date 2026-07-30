@@ -181,6 +181,9 @@ function parseCli(): { cfg: Config; cli: CliOptions } {
   cfg.CANVAS = { ...targetPreset.canvas };
   cfg.GRAIN.enabled = targetPreset.grain;
   cfg.LIGHTWRAP.enabled = targetPreset.lightWrap;
+  cfg.HARMONIZE.enabled = targetPreset.harmonize;
+  cfg.PAINT.enabled = targetPreset.paint;
+  cfg.BRANDING.enabled = targetPreset.watermark;
   // de statische default (4:3) hoort bij het showroom-canvas; elk ander
   // target zou anders een scène in de verkeerde verhouding vragen en die
   // vervolgens cover-croppen

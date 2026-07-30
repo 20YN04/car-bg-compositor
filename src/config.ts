@@ -709,6 +709,22 @@ export interface TargetPreset {
    */
   scaleMode: "wheel" | "frame";
   frameWidthRatio: number; // alleen bij scaleMode "frame"
+  /**
+   * Kleur/belichting richting de plate-toon trekken. Op een fotografische
+   * plate is dat de integratiestap; op zuiver wit is er geen omgevingstoon en
+   * wast harmoniseren de lak alleen maar uit — gemeten op de zilveren EQE
+   * (2026-07-30): de flank smolt in de witte achtergrond. Let op: hiermee
+   * vervalt op wit ook de set-consistentiepas; de referentie-catalogus toont
+   * de lak dan ook gewoon zoals geschoten.
+   */
+  harmonize: boolean;
+  /** Omgevingsreflecties in de lak dempen — zelfde meting, zelfde reden. */
+  paint: boolean;
+  /**
+   * Carredo-wordmark rechtsonder. De galerijbeelden dragen hem; de
+   * Lizy-stijl listing-cutout op wit is per referentie schoon.
+   */
+  watermark: boolean;
 }
 
 export interface Config {
@@ -848,6 +864,9 @@ export const defaultConfig: Config = {
       lightWrap: true,
       scaleMode: "wheel",
       frameWidthRatio: 0.76,
+      harmonize: true,
+      paint: true,
+      watermark: true,
     },
     /**
      * Geconstrueerde studio-sweep, geijkt op de live Carredo-listings
@@ -862,6 +881,9 @@ export const defaultConfig: Config = {
       lightWrap: true,
       scaleMode: "frame",
       frameWidthRatio: 0.78, // hun auto vult het kader ruimer
+      harmonize: true,
+      paint: true,
+      watermark: true,
     },
     white: {
       // 8:5, zoals de referenties in carredo-imaging-refs (1200x750)
@@ -871,6 +893,9 @@ export const defaultConfig: Config = {
       lightWrap: false,
       scaleMode: "frame",
       frameWidthRatio: 0.76, // referenties meten 73% en 78%
+      harmonize: false, // geen omgevingstoon om naar te trekken — wast alleen uit
+      paint: false,
+      watermark: false, // de Lizy-referenties zijn schoon
     },
   },
   CANVAS: { width: 1920, height: 1440 },
