@@ -236,12 +236,20 @@ function carredoPlateSvg(w: number, h: number, text: string): Buffer {
   );
   return Buffer.from(
     `<svg width="${w}" height="${h}" xmlns="http://www.w3.org/2000/svg">` +
+      `<defs><linearGradient id="gloss" x1="0" y1="0" x2="0" y2="1">` +
+      `<stop offset="0" stop-color="#ffffff" stop-opacity="0.13"/>` +
+      `<stop offset="0.45" stop-color="#ffffff" stop-opacity="0.03"/>` +
+      `<stop offset="1" stop-color="#ffffff" stop-opacity="0"/>` +
+      `</linearGradient></defs>` +
       `<rect width="${w}" height="${h}" rx="${r}" fill="#0c0e12"/>` +
       `<rect x="${inset}" y="${inset}" width="${w - inset * 2}" height="${h - inset * 2}"` +
       ` rx="${Math.max(1, r - inset)}" fill="none" stroke="#e9ecef" stroke-width="${stroke}"/>` +
       `<text x="${w / 2}" y="${h / 2}" font-family="Arial, sans-serif"` +
       ` font-weight="bold" font-size="${fontSize}" letter-spacing="${fontSize * 0.1}"` +
       ` fill="#f4f5f7" text-anchor="middle" dominant-baseline="central">${text}</text>` +
+      // vlakke glans over de plaat: studiolicht valt van boven in, en een
+      // badge zonder enige lichtval leest als sticker op de foto
+      `<rect width="${w}" height="${h}" rx="${r}" fill="url(#gloss)"/>` +
       `</svg>`,
   );
 }
@@ -329,14 +337,12 @@ async function quadOverlays(
     .png()
     .toBuffer();
 
-  // badge op het plaatvlak: renderen op de quad-maat en affine warpen.
-  // verticaal groeit de badge tot hij de detectieregio dekt, geklemd op een
-  // plaatachtige verhouding (≥3.4:1): dekt een te laag SAM2-quad (03) zonder
-  // op een te hoge detectiebox (01) tot een reuzensticker te ontsporen
+  // badge op het plaatvlak: renderen op de quad-maat en affine warpen. De
+  // badge volgt de gemeten plaat (kleine dekmarge) en groeit níet meer naar
+  // de detectieregio — dat maakte er een reuzensticker van; de dekgarantie
+  // voor een onderdekkend quad is de regioblur in anonymizePlates
   const wSpan = Math.hypot(quad.tr.x - quad.tl.x, quad.tr.y - quad.tl.y);
-  const targetY = Math.min(region.height * 0.95, wSpan / 3.4);
-  const badgeFy = ySpan > 0 ? Math.max(1.18, targetY / ySpan) : 1.18;
-  const badgeQuad = inflateQuad(quad, 1.05, badgeFy);
+  const badgeQuad = inflateQuad(quad, 1.06, 1.22);
   const w = Math.max(
     8,
     Math.round(Math.hypot(badgeQuad.tr.x - badgeQuad.tl.x, badgeQuad.tr.y - badgeQuad.tl.y)),
@@ -351,16 +357,63 @@ async function quadOverlays(
     plateCfg.overlayPath && existsSync(plateCfg.overlayPath)
       ? await sharp(plateCfg.overlayPath).resize(w, h, { fit: "fill" }).png().toBuffer()
       : await sharp(carredoPlateSvg(w, h, plateText)).png().toBuffer();
+
+  // montage-look 1/3: de badge draagt het licht van het vlak waar hij op
+  // hangt. Sample de bumperstrook direct boven de plaat en schaal de badge
+  // daarnaar — een vol-witte rand op een beschaduwde bumper verraadt de
+  // overlay meteen
+  let lit = flat;
+  const stripH = Math.max(4, Math.round(ySpan * 0.5));
+  const sx = Math.max(0, Math.floor(Math.min(quad.tl.x, quad.bl.x)));
+  const sw = Math.min(canvas.width - sx, Math.max(8, Math.ceil(wSpan)));
+  const sy = Math.max(0, Math.floor(Math.min(quad.tl.y, quad.tr.y)) - stripH);
+  if (sw >= 8 && sy + stripH <= canvas.height) {
+    const strip = await sharp(compositedPng)
+      .extract({ left: sx, top: sy, width: sw, height: stripH })
+      .greyscale()
+      .stats();
+    const mean = strip.channels[0]?.mean ?? 170;
+    // 170 ≈ neutraal verlicht bumpervlak in de studiobeelden; donkerder vlak
+    // → badge mee dimmen. Nooit oplichten boven 1.05: wit clipt lelijk
+    const factor = Math.min(1.05, Math.max(0.7, mean / 170));
+    lit = await sharp(flat)
+      .linear([factor, factor, factor, 1], [0, 0, 0, 0])
+      .png()
+      .toBuffer();
+  }
+
   const place = affinePlacementForQuad(badgeQuad, w, h);
-  const warped = await sharp(flat)
+  // montage-look 2/3: een fractie blur op de gewarpte badge zodat de rand
+  // dezelfde scherpte heeft als de foto — een vector-scherpe rand op een
+  // JPEG leest als opgeplakt
+  const warped = await sharp(lit)
     .affine(place.matrix, {
       background: { r: 0, g: 0, b: 0, alpha: 0 },
       interpolator: "bicubic",
     })
+    .blur(0.4)
     .png()
     .toBuffer();
+
+  // montage-look 3/3: een smalle slagschaduw net onder en naast de badge —
+  // een gemonteerde plaat staat een paar millimeter vóór de bumper en werpt
+  // die schaduw altijd
+  const shPoly = [badgeQuad.tl, badgeQuad.tr, badgeQuad.br, badgeQuad.bl]
+    .map((p) => `${(p.x - bx + 2).toFixed(1)},${(p.y - by + 3).toFixed(1)}`)
+    .join(" ");
+  const shadow = await sharp(
+    Buffer.from(
+      `<svg width="${bw + 8}" height="${bh + 8}" xmlns="http://www.w3.org/2000/svg">` +
+        `<polygon points="${shPoly}" fill="black" fill-opacity="0.38"/></svg>`,
+    ),
+  )
+    .blur(2.2)
+    .png()
+    .toBuffer();
+
   return [
     { input: blurPatch, left: bx, top: by },
+    { input: shadow, left: bx, top: by },
     { input: warped, left: Math.max(0, place.left), top: Math.max(0, place.top) },
   ];
 }
@@ -383,20 +436,28 @@ export async function anonymizePlates(
           compositedPng, t.quad, t.region, canvas, plateCfg, plateText,
         );
         if (viaQuad) {
-          // dekgarantie vóór de quad-lagen: een SAM2-quad dat de plaat
-          // onderdekt (front-3/4 op (5): de onderste ~30% met EU-strip en
-          // tekens bleef leesbaar) mag geen leesbare plaat opleveren. De
-          // regiobrede blur ligt eronder, de gewarpte badge komt erbovenop —
-          // visueel identiek zolang het quad wél klopt, maar zonder de
-          // stille GDPR-faalmodus als het misgaat.
-          overlays.push(
-            await blurOverlay(
-              compositedPng,
-              t.region,
-              Math.max(plateCfg.blurSigma, Math.min(t.region.width, t.region.height) / 5),
-              Math.round(Math.min(t.region.width, t.region.height) * 0.1),
-            ),
-          );
+          // dekgarantie alleen bij een quad dat de detectieregio zichtbaar
+          // onderdekt (front-3/4 op (5): de onderste ~30% met EU-strip
+          // bleef leesbaar). Een dekkend quad krijgt géén regioblur meer:
+          // die tekende zich als grijze veeg rond de badge af — precies de
+          // sticker-look die de quad-route moest voorkomen. De GDPR-borging
+          // blijft: onderdekt → regioblur eronder, dekkend → badge + de
+          // plaatvormige blur dekken de plaat per constructie.
+          const q = t.quad;
+          const wSpan = Math.hypot(q.tr.x - q.tl.x, q.tr.y - q.tl.y);
+          const ySpan = Math.max(q.bl.y, q.br.y) - Math.min(q.tl.y, q.tr.y);
+          const covers =
+            wSpan >= 0.7 * t.region.width && ySpan * 1.22 >= 0.45 * t.region.height;
+          if (!covers) {
+            overlays.push(
+              await blurOverlay(
+                compositedPng,
+                t.region,
+                Math.max(plateCfg.blurSigma, Math.min(t.region.width, t.region.height) / 5),
+                Math.round(Math.min(t.region.width, t.region.height) * 0.1),
+              ),
+            );
+          }
           overlays.push(...viaQuad);
           continue;
         }
