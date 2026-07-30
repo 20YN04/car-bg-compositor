@@ -1,6 +1,6 @@
 import "dotenv/config";
 import { existsSync } from "node:fs";
-import { appendFile, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import sharp from "sharp";
@@ -2173,6 +2173,26 @@ async function main(): Promise<void> {
         );
       }
     }
+  }
+
+  // synth-modus levert dé thumbnail van deze auto: altijd de Lizy-hoek,
+  // altijd dezelfde kadrering, en per definitie maar één beeld. Alles wat
+  // eerder in out/<map>/ stond is een tussenstand en gaat weg; het resultaat
+  // heet altijd thumbnail.jpg. Bij een mislukte synthese blijft out/
+  // onaangeroerd — nooit een bestaand beeld vervangen door niets.
+  if (cli.synth && results.length > 0 && results[0]!.ok) {
+    const outDir = path.join(OUT_DIR, cli.synth);
+    const resultName = path.parse(files[0]!).name + ".jpg";
+    for (const entry of await readdir(outDir, { withFileTypes: true })) {
+      if (!entry.isFile() || entry.name === resultName) continue;
+      await rm(path.join(outDir, entry.name), { force: true });
+    }
+    await rename(path.join(outDir, resultName), path.join(outDir, "thumbnail.jpg"));
+    // het synth-tussenbestand hoort niet tussen de bronfoto's te blijven:
+    // de generatie zelf is gecachet, en als input zou het beeld in een
+    // gewone batchrun meedraaien
+    await rm(path.join(IN_DIR, files[0]!), { force: true });
+    console.log(`\nthumbnail: ${path.join(outDir, "thumbnail.jpg")} — enige beeld in ${outDir}/`);
   }
 
   printSummary(results, cfg);

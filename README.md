@@ -58,7 +58,16 @@ pnpm start --plate replace          # plaat vervangen i.p.v. blurren (of: off)
 pnpm start --no-windows             # ruiten niet donker tinten
 pnpm start --no-harmonize           # kleur/belichting niet matchen
 pnpm start --preset side            # per-hoek kadrering (side/front34/rear34)
+pnpm start --synth VanMossel --target white   # dé listing-thumbnail voor deze auto
+pnpm start --check-details          # eindbeeld door Gemini langs de bron leggen
 ```
+
+`--synth <map>` levert per auto exact één thumbnail in de Lizy-stijl: Gemini
+identificeert het exacte model uit alle foto's in de map, reconstrueert de
+canonieke 3/4-vóór-rechts-hoek (identiteits- én lakpoort, met deterministische
+lakcorrectie), en het resultaat gaat door de gewone witte pipeline voor
+kadrering, CARREDO-plaat en schaduw. Na afloop bevat `out/<map>/` alléén
+`thumbnail.jpg`; een mislukte synthese laat `out/` onaangeroerd.
 
 Resultaten komen in `./out/` (JPEG). Per beeld verschijnt in `./debug/` het
 ruwe masker, een overlay met de bbox (rood) en de berekende grondlijn (groen),
