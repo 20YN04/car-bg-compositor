@@ -33,24 +33,26 @@ async function uploadImage(bytes: Buffer, name: string): Promise<string> {
   return fal.storage.upload(file);
 }
 
-/** Florence-2 grounding: plaathouder-boxen in het beeld, gecachet. */
-export async function detectPlateBoxes(
+/** Florence-2 grounding: boxen voor een tekstprompt, gecachet. */
+export async function florenceBoxes(
   imageBytes: Buffer,
-  cfg: PlateConfig,
+  prompt: string,
+  cacheSuffix: string,
+  modelId: string,
   cacheDir: string,
   useCache: boolean,
 ): Promise<PlateBox[]> {
   const hash = createHash("sha256")
     .update(imageBytes)
-    .update(cfg.detectPrompt)
+    .update(prompt)
     .digest("hex");
-  const cachePath = path.join(cacheDir, `${hash}.plates.json`);
+  const cachePath = path.join(cacheDir, `${hash}.${cacheSuffix}.json`);
   if (useCache && existsSync(cachePath)) {
     return JSON.parse(await readFile(cachePath, "utf8")) as PlateBox[];
   }
-  const imageUrl = await uploadImage(imageBytes, "plates.jpg");
-  const result = await fal.subscribe(cfg.detectionModelId, {
-    input: { image_url: imageUrl, text_input: cfg.detectPrompt },
+  const imageUrl = await uploadImage(imageBytes, `${cacheSuffix}.jpg`);
+  const result = await fal.subscribe(modelId, {
+    input: { image_url: imageUrl, text_input: prompt },
   });
   const data = result.data as {
     results?: { bboxes?: { x: number; y: number; w: number; h: number }[] };
@@ -60,6 +62,18 @@ export async function detectPlateBoxes(
   }));
   await writeFile(cachePath, JSON.stringify(boxes));
   return boxes;
+}
+
+/** Plaathouder-boxen in het beeld. */
+export async function detectPlateBoxes(
+  imageBytes: Buffer,
+  cfg: PlateConfig,
+  cacheDir: string,
+  useCache: boolean,
+): Promise<PlateBox[]> {
+  return florenceBoxes(
+    imageBytes, cfg.detectPrompt, "plates", cfg.detectionModelId, cacheDir, useCache,
+  );
 }
 
 /** SAM2-masker voor een box-prompt, gecachet. */

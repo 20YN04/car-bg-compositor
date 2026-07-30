@@ -1,5 +1,23 @@
 import sharp from "sharp";
 
+/** Kadervulling (bbox-breedte / beeldbreedte) van een cutout. */
+export async function measureFill(cutout: Buffer): Promise<number> {
+  const { data, info } = await sharp(cutout)
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  let left = info.width, right = -1;
+  for (let y = 0; y < info.height; y++) {
+    for (let x = 0; x < info.width; x++) {
+      if ((data[(y * info.width + x) * 4 + 3] ?? 0) > 10) {
+        if (x < left) left = x;
+        if (x > right) right = x;
+      }
+    }
+  }
+  return right < 0 ? 0 : (right - left + 1) / info.width;
+}
+
 /**
  * Schaalt de auto deterministisch naar zijn reële kadervulling.
  *
@@ -37,9 +55,12 @@ export async function normalizeScale(
   }
   if (right < 0) throw new Error("schaalnormalisatie: leeg masker");
   const measuredFill = (right - left + 1) / W;
-  const s = targetFill / measuredFill;
-  // alleen omlaag schalen; opblazen zou detail verzinnen
-  if (s >= 0.98) return { img, cutout, measuredFill };
+  // alleen omlaag schalen; opblazen zou detail verzinnen. Maar ALTIJD
+  // herpositioneren: een kandidaat die al op maat is moet nog steeds met
+  // zijn onderkant op de vaste grondlijn en gecentreerd staan — de Tesla
+  // stond gemeten op 0.800 waar 0.813 hoort, puur omdat de translatie
+  // alleen in het schaal-pad zat.
+  const s = Math.min(1, targetFill / measuredFill);
 
   const W2 = Math.max(1, Math.round(W * s));
   const H2 = Math.max(1, Math.round(H * s));

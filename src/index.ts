@@ -17,7 +17,8 @@ import {
 } from "./identify.js";
 import { getCutout, maskStats, noteFalFailure } from "./mask.js";
 import { cutoutMeans, medianMeans, type ChannelMeans } from "./measure.js";
-import { normalizeScale, replaceBackground } from "./background.js";
+import { measureFill, normalizeScale, replaceBackground } from "./background.js";
+import { checkGeometry, wheelbaseRatio } from "./geometry.js";
 import { detectPlateBoxes, mountPlate } from "./plate.js";
 
 const IN_DIR = "./in";
@@ -394,6 +395,23 @@ async function synthesizeAngle(
 
   const anchorBg = hasAnchor ? await backgroundMeans(genRefs[0]!.data) : null;
 
+  // geometrie-referentie: het meest zijdelingse bronbeeld geeft de echte
+  // wielbasis/wieldiameter-verhouding. Zonder betrouwbaar zijaanzicht
+  // (ratio < 3.3) vervalt de geometriepoort, met melding.
+  let sideRatio: number | null = null;
+  for (const r of refs) {
+    try {
+      const wr = await wheelbaseRatio(r.data, cfg.PLATE.detectionModelId, CACHE_DIR, cli.useCache);
+      if (wr !== null && (sideRatio === null || wr > sideRatio)) sideRatio = wr;
+    } catch (err) {
+      noteFalFailure(err);
+    }
+  }
+  if (sideRatio !== null && sideRatio < 3.3) sideRatio = null;
+  if (sideRatio === null) {
+    console.warn("  ⚠ geen betrouwbaar zijaanzicht in de bronset — geometriepoort inactief");
+  }
+
   let best: { img: Buffer; issues: string[] } | null = null;
   let feedback: string[] = [];
   for (let attempt = 0; attempt < cfg.SYNTH.maxAttempts; attempt++) {
@@ -455,6 +473,36 @@ async function synthesizeAngle(
     const qual = hasAnchor
       ? await checkQuality({ data: img }, genRefs[0]!, cfg.GEMINI, CACHE_DIR, cli.useCache)
       : { qualityOk: true, issues: [] };
+    // deterministische geometrie-poorten vóór de (betaalde) inspecties: een
+    // te klein gerenderde of samengedrukte koets is meetbaar — de VLM liet
+    // op een ongelukkige worp een 74%-Tesla door waar 85% hoorde
+    {
+      const geomIssues: string[] = [];
+      const fillNow = await measureFill(candCutout);
+      if (fillNow < fillPct - 0.06) {
+        geomIssues.push(
+          `the car is rendered too small: it fills ${Math.round(fillNow * 100)}% of the ` +
+            `frame width but must fill about ${Math.round(fillPct * 100)}% — render the ` +
+            "car larger in the frame",
+        );
+      }
+      try {
+        const candRatio = await wheelbaseRatio(
+          img, cfg.PLATE.detectionModelId, CACHE_DIR, cli.useCache,
+        );
+        const geom = checkGeometry(candRatio, sideRatio);
+        if (!geom.ok && geom.issue) geomIssues.push(geom.issue);
+      } catch (err) {
+        noteFalFailure(err);
+      }
+      if (geomIssues.length > 0) {
+        console.warn(
+          `  ⚠ synth-poging ${attempt + 1} verworpen (geometrie): ${geomIssues.join("; ")}`,
+        );
+        feedback = geomIssues;
+        continue;
+      }
+    }
     // deterministische lakmeting naast de VLM-inspectie: zilver dat wit
     // rendert kwam door de inspectie heen, maar niet door de meting
     let paintIssue: string | null = null;
