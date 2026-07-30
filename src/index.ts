@@ -1,6 +1,6 @@
 import "dotenv/config";
 import { existsSync } from "node:fs";
-import { appendFile, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import sharp from "sharp";
@@ -1913,8 +1913,9 @@ function synthPrompt(spec: string, feedback: string[]): string {
     "ANGLE: three-quarter FRONT view with the front of the car on the " +
     "RIGHT of the frame, roughly 30-35 degrees off axis, camera height " +
     "1.0-1.3 m.\n" +
-    "BACKGROUND: pure white #FFFFFF edge to edge, studio catalogue style, " +
-    "only a small tight contact shadow under the tyres. Neutral studio " +
+    "BACKGROUND: a seamless light grey photo studio (wall around #f0f2f4 " +
+    "fading into a slightly darker smooth floor), a soft contact shadow " +
+    "under the tyres and a subtle floor reflection. Neutral studio " +
     "reflections in the paint — no trees, no buildings.\n" +
     "The whole car stays in frame with clear margin on every side. No " +
     "people, no text, no watermark, no props. Licence plate: plain dark " +
@@ -1960,7 +1961,7 @@ async function synthesizeAngle(
   dir: string,
   cfg: Config,
   cli: CliOptions,
-): Promise<string> {
+): Promise<Buffer> {
   const all = await findImages(IN_DIR);
   const refFiles = all.filter(
     (f) => path.dirname(f) === dir && !path.basename(f).startsWith("_synth"),
@@ -2005,6 +2006,18 @@ async function synthesizeAngle(
       refs, synthPrompt(spec, feedback), cfg.GEMINI, CACHE_DIR, cli.useCache,
       cfg.GENBG.seed + attempt,
     );
+    // harde dimensiepoort vóór de (betaalde) inspectie: het model rendert
+    // alleen op zijn eigen vaste raster (3:2@2K = 2528×1696, gemeten
+    // 2026-07-30) — wijkt de ratio af, dan is er iets mis met de transport
+    // en heeft vergelijken geen zin
+    const dims = await sharp(img).metadata();
+    const ratio = (dims.width ?? 0) / Math.max(1, dims.height ?? 1);
+    if (Math.abs(ratio - 3 / 2) > 0.02) {
+      console.warn(
+        `  ⚠ synth-poging ${attempt + 1} verworpen: ${dims.width}×${dims.height} is geen 3:2`,
+      );
+      continue;
+    }
     const verdict = await compareAgainstSources(
       { data: img }, refs, spec, cfg.GEMINI, CACHE_DIR, cli.useCache,
     );
@@ -2075,15 +2088,12 @@ async function synthesizeAngle(
   }
   // de geaccepteerde kandidaat duurzaam bewaren, los van de seed-gebonden
   // generatiecache: dit is het beeld dat door alle poorten kwam, en het
-  // moet terug te vinden zijn ook nadat in/ en out/ zijn opgeruimd
+  // moet terug te vinden zijn ook nadat out/ is opgeruimd
   await writeFile(
     path.join(CACHE_DIR, `accepted-synth-${dir.replace(/[/\\]/g, "_")}.jpg`),
     best.img,
   );
-  const rel = path.join(dir, "_synth-front34.jpg");
-  await writeFile(path.join(IN_DIR, rel), best.img);
-  console.log(`  gesynthetiseerde hoek: in/${rel} → door de deterministische pipeline`);
-  return rel;
+  return best.img;
 }
 
 async function main(): Promise<void> {
@@ -2095,26 +2105,36 @@ async function main(): Promise<void> {
 
   let files: string[];
   if (cli.synth) {
-    // synthese is er alleen voor de witte listing-cutout; op een andere
-    // target zou het gegenereerde beeld ongemerkt een scène-pad inrollen
-    if (cfg.TARGET !== "white") {
-      throw new Error("--synth vereist --target white");
-    }
     // een bestaande thumbnail is een goedgekeurd beeld en wordt nooit stil
     // vervangen: elke hergeneratie is non-deterministisch en kan slechter
     // uitvallen (gebeurd op 2026-07-30 — een prima thumbnail werd door een
     // rerun met een gewijzigde referentieset overschreven). Hergenereren is
     // een expliciete daad: verwijder het bestand eerst.
-    const existing = path.join(OUT_DIR, cli.synth, "thumbnail.jpg");
-    if (existsSync(existing)) {
+    const outDir = path.join(OUT_DIR, cli.synth);
+    const thumbPath = path.join(outDir, "thumbnail.jpg");
+    if (existsSync(thumbPath)) {
       console.log(
-        `thumbnail bestaat al: ${existing} — wordt niet vervangen. ` +
+        `thumbnail bestaat al: ${thumbPath} — wordt niet vervangen. ` +
           "Verwijder het bestand als je bewust wil hergenereren.",
       );
       return;
     }
-    files = [await synthesizeAngle(cli.synth, cfg, cli)];
-  } else if (cli.file) {
+    // de galerij is 3:2 — los van welk target verder actief is
+    cfg.GEMINI.aspectRatio = "3:2";
+    // het goedgekeurde studiobeeld ÍS het eindresultaat (besluit 2026-07-30):
+    // geen witte uitsnede, geen hercompositing, plaathouder blijft zoals
+    // gegenereerd. Publiceren = wegschrijven, en out/<map>/ houdt exact
+    // één bestand over.
+    const accepted = await synthesizeAngle(cli.synth, cfg, cli);
+    await mkdir(outDir, { recursive: true });
+    for (const entry of await readdir(outDir, { withFileTypes: true })) {
+      if (entry.isFile()) await rm(path.join(outDir, entry.name), { force: true });
+    }
+    await writeFile(thumbPath, accepted);
+    console.log(`\nthumbnail: ${thumbPath} — enige beeld in ${outDir}/`);
+    return;
+  }
+  if (cli.file) {
     if (!existsSync(path.join(IN_DIR, cli.file))) {
       throw new Error(`bestand niet gevonden: ${path.join(IN_DIR, cli.file)}`);
     }
@@ -2193,26 +2213,6 @@ async function main(): Promise<void> {
         );
       }
     }
-  }
-
-  // synth-modus levert dé thumbnail van deze auto: altijd de Lizy-hoek,
-  // altijd dezelfde kadrering, en per definitie maar één beeld. Alles wat
-  // eerder in out/<map>/ stond is een tussenstand en gaat weg; het resultaat
-  // heet altijd thumbnail.jpg. Bij een mislukte synthese blijft out/
-  // onaangeroerd — nooit een bestaand beeld vervangen door niets.
-  if (cli.synth && results.length > 0 && results[0]!.ok) {
-    const outDir = path.join(OUT_DIR, cli.synth);
-    const resultName = path.parse(files[0]!).name + ".jpg";
-    for (const entry of await readdir(outDir, { withFileTypes: true })) {
-      if (!entry.isFile() || entry.name === resultName) continue;
-      await rm(path.join(outDir, entry.name), { force: true });
-    }
-    await rename(path.join(outDir, resultName), path.join(outDir, "thumbnail.jpg"));
-    // het synth-tussenbestand hoort niet tussen de bronfoto's te blijven:
-    // de generatie zelf is gecachet, en als input zou het beeld in een
-    // gewone batchrun meedraaien
-    await rm(path.join(IN_DIR, files[0]!), { force: true });
-    console.log(`\nthumbnail: ${path.join(outDir, "thumbnail.jpg")} — enige beeld in ${outDir}/`);
   }
 
   printSummary(results, cfg);
