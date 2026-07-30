@@ -27,7 +27,12 @@ import {
   scaleFromWheel,
   type Placement,
 } from "./composite.js";
-import { defaultConfig, type Config, type SegmentProvider } from "./config.js";
+import {
+  defaultConfig,
+  geminiAspectForCanvas,
+  type Config,
+  type SegmentProvider,
+} from "./config.js";
 import {
   aiStats,
   detectPlates,
@@ -176,6 +181,10 @@ function parseCli(): { cfg: Config; cli: CliOptions } {
   cfg.CANVAS = { ...targetPreset.canvas };
   cfg.GRAIN.enabled = targetPreset.grain;
   cfg.LIGHTWRAP.enabled = targetPreset.lightWrap;
+  // de statische default (4:3) hoort bij het showroom-canvas; elk ander
+  // target zou anders een scène in de verkeerde verhouding vragen en die
+  // vervolgens cover-croppen
+  cfg.GEMINI.aspectRatio = geminiAspectForCanvas(cfg.CANVAS);
   if (values["ground-y"] !== undefined) {
     cfg.GROUND_Y = Number(values["ground-y"]);
     if (!Number.isFinite(cfg.GROUND_Y)) throw new Error("--ground-y moet een getal zijn");

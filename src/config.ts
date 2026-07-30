@@ -574,6 +574,44 @@ export interface GeminiConfig {
   imageSize: "1K" | "2K" | "4K";
 }
 
+export type GeminiAspectRatio = GeminiConfig["aspectRatio"];
+
+const GEMINI_ASPECT_RATIOS: Record<GeminiAspectRatio, number> = {
+  "1:1": 1,
+  "2:3": 2 / 3,
+  "3:2": 3 / 2,
+  "3:4": 3 / 4,
+  "4:3": 4 / 3,
+  "4:5": 4 / 5,
+  "5:4": 5 / 4,
+  "9:16": 9 / 16,
+  "16:9": 16 / 9,
+  "21:9": 21 / 9,
+};
+
+/**
+ * De ondersteunde ratio die het dichtst bij de canvasverhouding ligt.
+ *
+ * GEMINI.aspectRatio moet de canvasverhouding volgen (zie het veld hierboven),
+ * maar de targets hebben verschillende canvassen — showroom 4:3, studio en
+ * white 3:2/8:5. Eén statische waarde kan dus niet voor alle targets kloppen;
+ * de cover-resize crop schoof bij een mismatch de gegenereerde vloerlijn weg
+ * onder de teruggeplakte auto.
+ */
+export function geminiAspectForCanvas(canvas: CanvasSize): GeminiAspectRatio {
+  const ratio = canvas.width / canvas.height;
+  let best: GeminiAspectRatio = "3:2";
+  let bestDiff = Infinity;
+  for (const [name, value] of Object.entries(GEMINI_ASPECT_RATIOS)) {
+    const diff = Math.abs(value - ratio);
+    if (diff < bestDiff) {
+      bestDiff = diff;
+      best = name as GeminiAspectRatio;
+    }
+  }
+  return best;
+}
+
 export type AnglePreset = "side" | "front34" | "rear34";
 
 export interface PresetOverride {
@@ -1192,8 +1230,8 @@ export const defaultConfig: Config = {
     guardBandRatio: 0.06,
   },
   GEMINI: {
-    // Gemini 3.1 Flash met image-generation: Nano Banana (image editing)
-    modelId: "gemini-3.1-flash-image",
+    // Gemini 3 Pro met image-generation (Nano Banana Pro, image editing)
+    modelId: "gemini-3-pro-image",
     costPerCall: 0.02, // schatting — ijken op Google AI Studio dashboard
     /**
      * Extra prompt-prefix voor Gemini: het model krijgt een beeld met
