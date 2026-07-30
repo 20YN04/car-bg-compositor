@@ -574,6 +574,26 @@ export interface GeminiConfig {
   imageSize: "1K" | "2K" | "4K";
 }
 
+/**
+ * Deterministische lakcontrole op een gesynthetiseerde hoek.
+ *
+ * De inspecteursvergelijking (VLM) keurde een synthese goed waarvan de lak
+ * zichtbaar witter was dan het echte High-Tech Silver — voor een taalmodel is
+ * "zilver in studiolicht" en "wit" hetzelfde verhaal. Daarom meten we het:
+ * de gemiddelde lak van de kandidaat (via de matte) moet binnen deze band
+ * van de mediaan van de bronfoto's blijven.
+ *
+ * Geijkt op de EQE-set (2026-07-30): de échte foto van de doelhoek zat op
+ * luminantieratio 1.007 en tintdelta's 0.040 (r/g) en 0.007 (b/g); de
+ * afgekeurde te witte synthese op ratio 1.198 en b/g-delta 0.064. Herijken
+ * zodra er meer sets door dit pad zijn gegaan.
+ */
+export interface SynthConfig {
+  minLumaRatio: number; // kandidaat/bron-mediaan, ondergrens
+  maxLumaRatio: number; // bovengrens
+  maxTintDelta: number; // max |Δ(r/g)| en |Δ(b/g)| t.o.v. de bron-mediaan
+}
+
 export type GeminiAspectRatio = GeminiConfig["aspectRatio"];
 
 const GEMINI_ASPECT_RATIOS: Record<GeminiAspectRatio, number> = {
@@ -804,6 +824,7 @@ export interface Config {
   FINISH: FinishConfig; // grade op het eindbeeld
   GENBG: GenBgConfig; // hybride generatieve scène rond de beschermde auto
   GEMINI: GeminiConfig;
+  SYNTH: SynthConfig; // lakbewaking op een gesynthetiseerde hoek
   QWEN: QwenConfig; // Google Gemini Nano Banana (image editing)
   BACKGROUND_PROFILES: Record<string, BackgroundProfile>; // key = bestandsnaam
   DEFAULT_PROFILE: BackgroundProfile;
@@ -1253,6 +1274,11 @@ export const defaultConfig: Config = {
     fillMaxMegapixels: 1,
     maskFeather: 6,
     guardBandRatio: 0.06,
+  },
+  SYNTH: {
+    minLumaRatio: 0.85,
+    maxLumaRatio: 1.15,
+    maxTintDelta: 0.05,
   },
   GEMINI: {
     // Gemini 3 Pro met image-generation (Nano Banana Pro, image editing)

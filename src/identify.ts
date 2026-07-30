@@ -1,5 +1,6 @@
-import type { GeminiConfig } from "./config.js";
+import type { GeminiConfig, SynthConfig } from "./config.js";
 import { geminiText, type ImagePart } from "./gemini.js";
+import type { ChannelMeans } from "./harmonize.js";
 
 /**
  * Exacte voertuigidentificatie uit de hele fotoset.
@@ -25,6 +26,8 @@ export async function identifyVehicle(
 
 export interface IdentityVerdict {
   sameVehicle: boolean;
+  /** Aparte lakbeoordeling: tint, lichtheid en metallic-karakter. */
+  paintMatch: boolean;
   issues: string[];
 }
 
@@ -53,9 +56,13 @@ export async function compareAgainstSources(
     "handles, antennas and sensors. List every detail that is missing, " +
     "changed or invented in the candidate. Ignore background, framing, " +
     "shadow and licence-plate contents — those are handled elsewhere.\n" +
+    "Judge the paint colour SEPARATELY and strictly: compare hue, " +
+    "lightness and metallic character. A silver car that renders white or " +
+    "cream, a grey that loses its blue cast, or any colour shift relative " +
+    "to the sources is a paint mismatch even when the model is right.\n" +
     'Answer with STRICT JSON only, no code fences: {"same_vehicle": ' +
-    'boolean, "issues": string[]} — issues stays empty when everything ' +
-    "matches.";
+    'boolean, "paint_match": boolean, "issues": string[]} — issues stays ' +
+    "empty when everything matches.";
   const raw = await geminiText(
     [candidate, ...sources], prompt, cfg, cacheDir, useCache,
   );
@@ -69,10 +76,14 @@ export function parseVerdict(raw: string): IdentityVerdict {
     try {
       const obj = JSON.parse(match[0]) as {
         same_vehicle?: unknown;
+        paint_match?: unknown;
         issues?: unknown;
       };
       return {
         sameVehicle: obj.same_vehicle === true,
+        // ontbreekt het veld (ouder cache-antwoord), dan beslist de
+        // deterministische lakmeting alleen — niet dubbel straffen
+        paintMatch: obj.paint_match !== false,
         issues: Array.isArray(obj.issues)
           ? obj.issues.filter((i): i is string => typeof i === "string")
           : [],
@@ -83,5 +94,43 @@ export function parseVerdict(raw: string): IdentityVerdict {
   }
   // geen parsebare JSON: alleen een expliciete ja zonder twijfeltaal telt
   const yes = /"?same_vehicle"?\s*[:=]?\s*true|^\s*yes\b/i.test(raw);
-  return { sameVehicle: yes, issues: yes ? [] : [raw.slice(0, 300)] };
+  return { sameVehicle: yes, paintMatch: yes, issues: yes ? [] : [raw.slice(0, 300)] };
+}
+
+const luma = (m: ChannelMeans): number => 0.2126 * m.r + 0.7152 * m.g + 0.0722 * m.b;
+
+/**
+ * Deterministische lakvergelijking: kandidaat-lak tegen de bron-mediaan.
+ *
+ * De VLM-inspectie bleek hier te vergeeflijk — zilver dat wit rendert kwam
+ * erdoor. Dit meet het: luminantieratio (te licht/te donker) en de
+ * tintverhoudingen r/g en b/g (kleurzweem; het koele zilver van de EQE zit
+ * in die b/g). Engelstalige melding, want het resultaat gaat als
+ * correctie-instructie terug de generatieprompt in.
+ */
+export function paintDeviation(
+  candidate: ChannelMeans,
+  reference: ChannelMeans,
+  cfg: SynthConfig,
+): string | null {
+  const ratio = luma(candidate) / Math.max(1e-6, luma(reference));
+  const dRG = Math.abs(candidate.r / candidate.g - reference.r / reference.g);
+  const dBG = Math.abs(candidate.b / candidate.g - reference.b / reference.g);
+  const parts: string[] = [];
+  if (ratio < cfg.minLumaRatio || ratio > cfg.maxLumaRatio) {
+    parts.push(
+      `the paint renders ${ratio > 1 ? "lighter" : "darker"} than the source ` +
+        `paint (luminance x${ratio.toFixed(2)}, allowed ` +
+        `${cfg.minLumaRatio}-${cfg.maxLumaRatio}) — match the exact paint ` +
+        "tone of the source photos",
+    );
+  }
+  if (dRG > cfg.maxTintDelta || dBG > cfg.maxTintDelta) {
+    parts.push(
+      `the paint tint drifts from the source paint (Δr/g ${dRG.toFixed(3)}, ` +
+        `Δb/g ${dBG.toFixed(3)}, allowed ${cfg.maxTintDelta}) — keep the ` +
+        "exact colour cast of the source photos",
+    );
+  }
+  return parts.length > 0 ? parts.join("; ") : null;
 }

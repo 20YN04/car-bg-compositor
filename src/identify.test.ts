@@ -1,10 +1,21 @@
 import { describe, expect, it } from "vitest";
-import { parseVerdict } from "./identify.js";
+import { paintDeviation, parseVerdict } from "./identify.js";
 
 describe("parseVerdict", () => {
   it("leest strikte JSON", () => {
+    const v = parseVerdict('{"same_vehicle": true, "paint_match": true, "issues": []}');
+    expect(v).toEqual({ sameVehicle: true, paintMatch: true, issues: [] });
+  });
+
+  it("een expliciete lak-afkeuring komt door", () => {
+    const v = parseVerdict('{"same_vehicle": true, "paint_match": false, "issues": ["paint too light"]}');
+    expect(v.sameVehicle).toBe(true);
+    expect(v.paintMatch).toBe(false);
+  });
+
+  it("zonder paint_match-veld beslist de meting, niet de parser", () => {
     const v = parseVerdict('{"same_vehicle": true, "issues": []}');
-    expect(v).toEqual({ sameVehicle: true, issues: [] });
+    expect(v.paintMatch).toBe(true);
   });
 
   it("overleeft code fences en proza eromheen", () => {
@@ -31,5 +42,30 @@ describe("parseVerdict", () => {
   it("kapotte JSON valt terug op de tekstheuristiek", () => {
     const v = parseVerdict('{"same_vehicle": true, "issues": [broken');
     expect(v.sameVehicle).toBe(true);
+  });
+});
+
+describe("paintDeviation", () => {
+  const cfg = { minLumaRatio: 0.85, maxLumaRatio: 1.15, maxTintDelta: 0.05 };
+  // ijkpunten gemeten op de EQE-set, 2026-07-30
+  const bronMediaan = { r: 117, g: 120, b: 132 };
+
+  it("de echte foto van de doelhoek passeert (ratio 1.007)", () => {
+    expect(paintDeviation({ r: 114, g: 121, b: 135 }, bronMediaan, cfg)).toBeNull();
+  });
+
+  it("de te witte synthese faalt op luminantie én tint", () => {
+    const issue = paintDeviation({ r: 142, g: 144, b: 149 }, bronMediaan, cfg);
+    expect(issue).toMatch(/luminance/);
+    expect(issue).toMatch(/tint/);
+  });
+
+  it("een te donkere kandidaat faalt op de ondergrens", () => {
+    const issue = paintDeviation({ r: 90, g: 92, b: 101 }, bronMediaan, cfg);
+    expect(issue).toMatch(/darker/);
+  });
+
+  it("identieke lak is per definitie schoon", () => {
+    expect(paintDeviation(bronMediaan, bronMediaan, cfg)).toBeNull();
   });
 });

@@ -53,7 +53,7 @@ import {
   positioningGrid,
   type ImagePart,
 } from "./gemini.js";
-import { compareAgainstSources, identifyVehicle } from "./identify.js";
+import { compareAgainstSources, identifyVehicle, paintDeviation } from "./identify.js";
 import { generateSceneQwen, qwenStats } from "./qwen.js";
 import {
   applyGreenhouse,
@@ -1926,6 +1926,23 @@ function synthPrompt(spec: string, feedback: string[]): string {
  * geschreven. Het geaccepteerde beeld gaat daarna als gewone input door de
  * deterministische pipeline — kadrering, plaat en schaduw blijven code.
  */
+/** Gemiddelde lakkleur van één beeld, gemeten op de matte-pixels. */
+async function paintMeansOf(
+  filePath: string,
+  cfg: Config,
+  useCache: boolean,
+): Promise<ChannelMeans> {
+  const cutout = await getCutout(filePath, CACHE_DIR, cfg.FAL, cfg.MATTE, useCache);
+  const { data, info } = await sharp(cutout)
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  const n = info.width * info.height;
+  const alpha = new Uint8Array(n);
+  for (let i = 0; i < n; i++) alpha[i] = data[i * 4 + 3] ?? 0;
+  return cutoutMeans(data, alpha, info.width, info.height);
+}
+
 async function synthesizeAngle(
   dir: string,
   cfg: Config,
@@ -1948,6 +1965,26 @@ async function synthesizeAngle(
   const spec = await identifyVehicle(refs, cfg.GEMINI, CACHE_DIR, cli.useCache);
   console.log(`  voertuig: ${spec}`);
 
+  // lak-referentie: mediaan over de bronfoto's, robuust tegen één afwijkende
+  // opname. Faalt de matte op álle bronfoto's, dan is er niets om tegen te
+  // meten en blijft alleen de VLM-inspectie over — met een melding, zodat
+  // een stille terugval niet voor een strengere poort wordt aangezien.
+  const srcMeans: ChannelMeans[] = [];
+  for (const f of refFiles) {
+    try {
+      srcMeans.push(await paintMeansOf(path.join(IN_DIR, f), cfg, cli.useCache));
+    } catch (err) {
+      noteFalFailure(err);
+    }
+  }
+  const srcMedian = srcMeans.length > 0 ? medianMeans(srcMeans) : null;
+  if (!srcMedian) {
+    console.warn(
+      "  ⚠ geen bron-lakmediaan meetbaar (matte faalde op alle bronfoto's) — " +
+        "lakbewaking draait alleen op de VLM-inspectie",
+    );
+  }
+
   let best: { img: Buffer; issues: string[] } | null = null;
   let feedback: string[] = [];
   for (let attempt = 0; attempt < cfg.GENBG.maxAttempts; attempt++) {
@@ -1958,19 +1995,33 @@ async function synthesizeAngle(
     const verdict = await compareAgainstSources(
       { data: img }, refs, spec, cfg.GEMINI, CACHE_DIR, cli.useCache,
     );
-    if (
-      verdict.sameVehicle &&
-      (best === null || verdict.issues.length < best.issues.length)
-    ) {
+    // deterministische lakmeting naast de VLM-inspectie: zilver dat wit
+    // rendert kwam door de inspectie heen, maar niet door de meting
+    let paintIssue: string | null = null;
+    if (srcMedian) {
+      const candPath = path.join(CACHE_DIR, `synth-candidate-${cfg.GENBG.seed + attempt}.jpg`);
+      await writeFile(candPath, img);
+      const cand = await paintMeansOf(candPath, cfg, cli.useCache);
+      paintIssue = paintDeviation(cand, srcMedian, cfg.SYNTH);
+    }
+    const allIssues = [
+      ...verdict.issues,
+      ...(verdict.paintMatch ? [] : ["inspection judged the paint colour different from the sources"]),
+      ...(paintIssue ? [paintIssue] : []),
+    ];
+    const acceptable = verdict.sameVehicle && verdict.paintMatch && paintIssue === null;
+    if (acceptable && (best === null || verdict.issues.length < best.issues.length)) {
       best = { img, issues: verdict.issues };
     }
-    if (verdict.sameVehicle && verdict.issues.length === 0) break;
+    if (acceptable && verdict.issues.length === 0) break;
     console.warn(
       `  ⚠ synth-poging ${attempt + 1} ` +
-        (verdict.sameVehicle ? "met afwijkingen" : "afgekeurd (andere auto)") +
-        `: ${verdict.issues.join("; ") || "(geen detail opgegeven)"}`,
+        (verdict.sameVehicle
+          ? acceptable ? "met afwijkingen" : "afgekeurd (lak)"
+          : "afgekeurd (andere auto)") +
+        `: ${allIssues.join("; ") || "(geen detail opgegeven)"}`,
     );
-    if (verdict.issues.length > 0) feedback = verdict.issues;
+    if (allIssues.length > 0) feedback = allIssues;
   }
   if (!best) {
     throw new Error(
