@@ -592,6 +592,15 @@ export interface SynthConfig {
   minLumaRatio: number; // kandidaat/bron-mediaan, ondergrens
   maxLumaRatio: number; // bovengrens
   maxTintDelta: number; // max |Δ(r/g)| en |Δ(b/g)| t.o.v. de bron-mediaan
+  /**
+   * Compositie-anker: de eerste goedgekeurde thumbnail (EQE, 2026-07-30),
+   * als vast referentiebeeld voor kader, camerahoogte, schaal en
+   * achtergrond. Zonder anker koos het model die per auto zelf en week de
+   * Taycan zichtbaar af van de EQE (hogere camera, kleinere auto in beeld).
+   * De prompt verbiedt expliciet om wagendetails uit het anker over te
+   * nemen; de identiteitspoort vangt het als het toch gebeurt.
+   */
+  anchorPath: string;
 }
 
 export type GeminiAspectRatio = GeminiConfig["aspectRatio"];
@@ -1285,6 +1294,7 @@ export const defaultConfig: Config = {
     minLumaRatio: 0.85,
     maxLumaRatio: 1.15,
     maxTintDelta: 0.05,
+    anchorPath: "assets/thumbnail-composition-anchor.jpg",
   },
   GEMINI: {
     // Gemini 3 Pro met image-generation (Nano Banana Pro, image editing)

@@ -1903,13 +1903,25 @@ async function computeSetReferences(
   return refs;
 }
 
-function synthPrompt(spec: string, feedback: string[]): string {
-  let p =
-    `Create a professional catalogue photo of this exact vehicle: ${spec}.\n` +
-    "The attached photos are the ONLY truth for this vehicle's design: " +
-    "body, paint colour, wheels, badges, lights, grille, trim, mirrors and " +
-    "glass. Reconstruct the car from them — do not restyle, modernise or " +
-    "invent anything.\n" +
+function synthPrompt(spec: string, feedback: string[], hasAnchor: boolean): string {
+  let p = `Create a professional catalogue photo of this exact vehicle: ${spec}.\n`;
+  if (hasAnchor) {
+    p +=
+      "The FIRST image is a COMPOSITION ANCHOR showing a DIFFERENT " +
+      "vehicle. Match it EXACTLY on: camera angle and height, vehicle " +
+      "position and scale in the frame, background, lighting, floor " +
+      "shadow and reflection. Take ZERO vehicle design details from the " +
+      "anchor — no body parts, no wheels, no badges.\n" +
+      "All OTHER images are source photos of the vehicle to reconstruct; ";
+  } else {
+    p += "The attached photos are source photos of the vehicle to reconstruct; ";
+  }
+  p +=
+    "they are the ONLY truth for its design: body, paint colour, wheels, " +
+    "badges, lights, grille, trim, mirrors and glass. Do not restyle, " +
+    "modernise or invent anything, and KEEP THE REAL PROPORTIONS — " +
+    "wheelbase, body length, height and wheel size exactly as in the " +
+    "source photos, never stretched or compressed.\n" +
     "ANGLE: three-quarter FRONT view with the front of the car on the " +
     "RIGHT of the frame, roughly 30-35 degrees off axis, camera height " +
     "1.0-1.3 m.\n" +
@@ -1917,7 +1929,8 @@ function synthPrompt(spec: string, feedback: string[]): string {
     "fading into a slightly darker smooth floor), a soft contact shadow " +
     "under the tyres and a subtle floor reflection. Neutral studio " +
     "reflections in the paint — no trees, no buildings.\n" +
-    "The whole car stays in frame with clear margin on every side. No " +
+    "The car fills about three quarters of the frame width, horizontally " +
+    "centred, whole car in frame with clear margin on every side. No " +
     "people, no text, no watermark, no props. Licence plate: plain dark " +
     "plate without readable characters.";
   if (feedback.length > 0) {
@@ -1979,6 +1992,20 @@ async function synthesizeAngle(
   const spec = await identifyVehicle(refs, cfg.GEMINI, CACHE_DIR, cli.useCache);
   console.log(`  voertuig: ${spec}`);
 
+  // compositie-anker vooraan in de invoer; de bronfoto's volgen erna. De
+  // inspectie vergelijkt uitsluitend tegen de bronfoto's, dus het anker kan
+  // daar geen identiteit in lekken.
+  let genRefs = refs;
+  let hasAnchor = false;
+  if (existsSync(cfg.SYNTH.anchorPath)) {
+    genRefs = [{ data: await readFile(cfg.SYNTH.anchorPath) }, ...refs];
+    hasAnchor = true;
+  } else {
+    console.warn(
+      `  ⚠ compositie-anker ontbreekt (${cfg.SYNTH.anchorPath}) — kadrering kan per auto verschillen`,
+    );
+  }
+
   // lak-referentie: mediaan over de bronfoto's, robuust tegen één afwijkende
   // opname. Faalt de matte op álle bronfoto's, dan is er niets om tegen te
   // meten en blijft alleen de VLM-inspectie over — met een melding, zodat
@@ -2003,8 +2030,8 @@ async function synthesizeAngle(
   let feedback: string[] = [];
   for (let attempt = 0; attempt < cfg.GENBG.maxAttempts; attempt++) {
     let img = await generateNovelView(
-      refs, synthPrompt(spec, feedback), cfg.GEMINI, CACHE_DIR, cli.useCache,
-      cfg.GENBG.seed + attempt,
+      genRefs, synthPrompt(spec, feedback, hasAnchor), cfg.GEMINI, CACHE_DIR,
+      cli.useCache, cfg.GENBG.seed + attempt,
     );
     // harde dimensiepoort vóór de (betaalde) inspectie: het model rendert
     // alleen op zijn eigen vaste raster (3:2@2K = 2528×1696, gemeten

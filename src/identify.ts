@@ -53,9 +53,12 @@ export async function compareAgainstSources(
     "Compare the candidate against the sources like a vehicle inspector. " +
     "Check the exact model and generation, paint colour, wheel design, " +
     "badges, head- and taillights, grille, trim, roof line, mirrors, door " +
-    "handles, antennas and sensors. List every detail that is missing, " +
-    "changed or invented in the candidate. Ignore background, framing, " +
-    "shadow and licence-plate contents — those are handled elsewhere.\n" +
+    "handles, antennas and sensors. Also check the PROPORTIONS: wheelbase " +
+    "versus body length, roof height, overhangs and wheel size must match " +
+    "the sources — a stretched, squashed or otherwise distorted body is a " +
+    "mismatch. List every detail that is missing, changed, invented or " +
+    "distorted in the candidate. Ignore background, framing, shadow and " +
+    "licence-plate contents — those are handled elsewhere.\n" +
     "Judge the paint colour SEPARATELY and strictly: compare hue, " +
     "lightness and metallic character. A silver car that renders white or " +
     "cream, a grey that loses its blue cast, or any colour shift relative " +
