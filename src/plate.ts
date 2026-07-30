@@ -34,7 +34,7 @@ async function uploadImage(bytes: Buffer, name: string): Promise<string> {
 }
 
 /** Florence-2 grounding: plaathouder-boxen in het beeld, gecachet. */
-async function detectPlateBoxes(
+export async function detectPlateBoxes(
   imageBytes: Buffer,
   cfg: PlateConfig,
   cacheDir: string,

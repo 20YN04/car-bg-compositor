@@ -18,7 +18,7 @@ import {
 import { getCutout, maskStats, noteFalFailure } from "./mask.js";
 import { cutoutMeans, medianMeans, type ChannelMeans } from "./measure.js";
 import { normalizeScale, replaceBackground } from "./background.js";
-import { mountPlate } from "./plate.js";
+import { detectPlateBoxes, mountPlate } from "./plate.js";
 
 const IN_DIR = "./in";
 const OUT_DIR = "./out";
@@ -136,6 +136,7 @@ async function applyMaskedGains(
   img: Buffer,
   cutout: Buffer,
   gains: [number, number, number],
+  excludeBox: { x: number; y: number; w: number; h: number } | null = null,
 ): Promise<Buffer> {
   const meta = await sharp(img).metadata();
   const width = meta.width ?? 1;
@@ -151,6 +152,17 @@ async function applyMaskedGains(
     .blur(1)
     .raw()
     .toBuffer();
+  if (excludeBox) {
+    // plaatzone (met marge) uit het gain-masker: de lakcorrectie bestaat om
+    // lakdrift te repareren, maar verkleurde de witte Carredo-plaat mee
+    const x0 = Math.max(0, Math.round(excludeBox.x - excludeBox.w * 0.1));
+    const x1 = Math.min(width - 1, Math.round(excludeBox.x + excludeBox.w * 1.1));
+    const y0 = Math.max(0, Math.round(excludeBox.y - excludeBox.h * 0.15));
+    const y1 = Math.min(height - 1, Math.round(excludeBox.y + excludeBox.h * 1.15));
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) maskRaw[y * width + x] = 0;
+    }
+  }
   // let op: geen removeAlpha in deze pipeline — sharp voert operaties in
   // vaste interne volgorde uit en stript dan het zojuist aangehechte
   // alfakanaal weer (gemeten: 3 kanalen uit, masker genegeerd)
@@ -161,6 +173,39 @@ async function applyMaskedGains(
     .toBuffer();
   return sharp(img)
     .composite([{ input: maskedCar }])
+    .jpeg({ quality: 97 })
+    .toBuffer();
+}
+
+/**
+ * Achtergrond-gains die de auto nooit raken. De normalisatie naar de
+ * anker-belichting is een decor-ingreep, maar als globale gain kleurde hij
+ * ook de ramen en de nummerplaat mee (tot ×1.4 bij bronsets uit een donkere
+ * studio — dáár kwam de "verkleurde ruiten"-klacht vandaan). De originele
+ * autopixels gaan er via de matte exact overheen terug.
+ */
+async function applyBackgroundGains(
+  img: Buffer,
+  cutout: Buffer,
+  gains: [number, number, number],
+): Promise<Buffer> {
+  const meta = await sharp(img).metadata();
+  const width = meta.width ?? 1;
+  const height = meta.height ?? 1;
+  const maskRaw = await sharp(cutout)
+    .resize(width, height, { fit: "fill" })
+    .ensureAlpha()
+    .extractChannel(3)
+    .blur(1)
+    .raw()
+    .toBuffer();
+  const carLayer = await sharp(img)
+    .joinChannel(maskRaw, { raw: { width, height, channels: 1 } })
+    .png()
+    .toBuffer();
+  return sharp(img)
+    .linear(gains, [0, 0, 0])
+    .composite([{ input: carLayer }])
     .jpeg({ quality: 97 })
     .toBuffer();
 }
@@ -368,12 +413,13 @@ async function synthesizeAngle(
       );
       continue;
     }
-    // belichting deterministisch naar het anker normaliseren: de gemeten
-    // achtergrondkleur wordt met per-kanaal gains exact op de anker-studio
-    // gelegd — zo is de belichting per constructie uniform over alle
-    // thumbnails, in plaats van te hopen dat het model 'm elke keer gelijk
-    // rendert. De cap houdt een structureel ander decor (donkere
-    // bronstudio) buiten bereik; dat vangt de poort hieronder.
+    const candPath = path.join(CACHE_DIR, `synth-candidate-${cfg.SYNTH.seed + attempt}.jpg`);
+    await writeFile(candPath, img);
+    const candCutout = await getCutout(candPath, CACHE_DIR, cfg.FAL, cfg.MATTE, cli.useCache);
+    // belichting deterministisch naar het anker normaliseren — maar alléén
+    // de achtergrond: als globale gain kleurde dit ook ramen en plaat mee.
+    // De cap houdt een structureel ander decor (donkere bronstudio) buiten
+    // bereik; dat vangt de poort hieronder.
     if (anchorBg) {
       const candBg = await backgroundMeans(img);
       const cap = 1.45;
@@ -381,10 +427,7 @@ async function synthesizeAngle(
         Math.min(cap, Math.max(1 / cap, [anchorBg.r, anchorBg.g, anchorBg.b][i]! / Math.max(1e-6, v))),
       )) as [number, number, number];
       if (Math.max(...g.map((v) => Math.abs(v - 1))) > 0.015) {
-        img = await sharp(img)
-          .linear(g, [0, 0, 0])
-          .jpeg({ quality: 97 })
-          .toBuffer();
+        img = await applyBackgroundGains(img, candCutout, g);
       }
       const bgIssue = backgroundDeviation(await backgroundMeans(img), anchorBg);
       if (bgIssue) {
@@ -412,12 +455,6 @@ async function synthesizeAngle(
     const qual = hasAnchor
       ? await checkQuality({ data: img }, genRefs[0]!, cfg.GEMINI, CACHE_DIR, cli.useCache)
       : { qualityOk: true, issues: [] };
-    // schaal wordt niet afgekeurd maar gecorrigeerd: het model tekent elke
-    // auto het kader vol, en de deterministische normalizeScale bij
-    // publicatie zet hem op zijn reële vulling. De prompt-hint blijft.
-    const candPath = path.join(CACHE_DIR, `synth-candidate-${cfg.SYNTH.seed + attempt}.jpg`);
-    await writeFile(candPath, img);
-    const candCutout = await getCutout(candPath, CACHE_DIR, cfg.FAL, cfg.MATTE, cli.useCache);
     // deterministische lakmeting naast de VLM-inspectie: zilver dat wit
     // rendert kwam door de inspectie heen, maar niet door de meting
     let paintIssue: string | null = null;
@@ -437,7 +474,21 @@ async function synthesizeAngle(
         verdict.issues.length === 0 && !prop.distorted
       ) {
         const gains = paintCorrectionGains(cand, srcMedian);
-        const corrected = await applyMaskedGains(img, candCutout, gains);
+        // de plaat uit de correctie houden: zonder exclusie kreeg de witte
+        // Carredo-plaat de donker-gains van de koets mee
+        let plateBox: { x: number; y: number; w: number; h: number } | null = null;
+        try {
+          const dims2 = await sharp(img).metadata();
+          const boxes = await detectPlateBoxes(img, cfg.PLATE, CACHE_DIR, cli.useCache);
+          plateBox =
+            boxes
+              .filter((b) => b.w / Math.max(1, b.h) >= 1.5 && b.w / Math.max(1, b.h) <= 9)
+              .filter((b) => b.y + b.h / 2 > (dims2.height ?? 0) * 0.5)
+              .sort((a, b) => b.w * b.h - a.w * a.h)[0] ?? null;
+        } catch {
+          // zonder box corrigeert de gain ook de plaat — jammer maar geen blokkade
+        }
+        const corrected = await applyMaskedGains(img, candCutout, gains, plateBox);
         const corrPath = path.join(
           CACHE_DIR, `synth-corrected-${cfg.SYNTH.seed + attempt}.jpg`,
         );

@@ -154,7 +154,9 @@ export async function replaceBackground(
       ratioU8[i] = Math.round((sum / 3) * 255);
     }
   }
-  const blurSigma = Math.max(1.5, width * 0.008);
+  // 0.004 sinds de "blur is raar"-feedback: de zachte schaduwpoel bleef te
+  // wollig; de naadonderdrukking heeft aan de halve straal genoeg
+  const blurSigma = Math.max(1.5, width * 0.004);
   // zonder expliciet 1-kanaals doel promoveert sharp de blur naar 3 kanalen
   // en verschuiven alle bytes (zelfde valkuil als bij de oude matte-feather)
   const ratioBlurred = await sharp(ratioU8, { raw: { width, height, channels: 1 } })
@@ -180,7 +182,7 @@ export async function replaceBackground(
       const p = i * 3;
       const a = (alpha[i] ?? 0) / 255;
       const w = zoneWeight(x, y);
-      const near = Math.min(1, ((proximity[i] ?? 0) / 255) * 2.5);
+      const near = Math.min(1, ((proximity[i] ?? 0) / 255) * 3.5);
       const raw = (ratioU8[i] ?? 255) / 255;
       const soft = (ratioBlurred[i] ?? 255) / 255;
       let ratio = raw * near + soft * (1 - near);
