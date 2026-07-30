@@ -69,6 +69,12 @@ lakcorrectie), en het resultaat gaat door de gewone witte pipeline voor
 kadrering, CARREDO-plaat en schaduw. Na afloop bevat `out/<map>/` alléén
 `thumbnail.jpg`; een mislukte synthese laat `out/` onaangeroerd.
 
+Een bestaande `thumbnail.jpg` wordt **nooit** stil vervangen — hergenereren is
+non-deterministisch en kan slechter uitvallen dan wat er staat. Bewust opnieuw?
+Verwijder het bestand eerst. De geaccepteerde kandidaat staat ook duurzaam in
+`cache/accepted-synth-<map>.jpg`, dus een goedgekeurd beeld is altijd terug te
+halen.
+
 Resultaten komen in `./out/` (JPEG). Per beeld verschijnt in `./debug/` het
 ruwe masker, een overlay met de bbox (rood) en de berekende grondlijn (groen),
 en een JSON-regel in `run.jsonl` met bbox, grondlijn, schaal, eindpositie en

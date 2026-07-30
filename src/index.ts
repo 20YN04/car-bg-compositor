@@ -2073,6 +2073,13 @@ async function synthesizeAngle(
       `  ⚠ [SYNTH_IDENTITY] beste kandidaat houdt afwijkingen: ${best.issues.join("; ")}`,
     );
   }
+  // de geaccepteerde kandidaat duurzaam bewaren, los van de seed-gebonden
+  // generatiecache: dit is het beeld dat door alle poorten kwam, en het
+  // moet terug te vinden zijn ook nadat in/ en out/ zijn opgeruimd
+  await writeFile(
+    path.join(CACHE_DIR, `accepted-synth-${dir.replace(/[/\\]/g, "_")}.jpg`),
+    best.img,
+  );
   const rel = path.join(dir, "_synth-front34.jpg");
   await writeFile(path.join(IN_DIR, rel), best.img);
   console.log(`  gesynthetiseerde hoek: in/${rel} → door de deterministische pipeline`);
@@ -2092,6 +2099,19 @@ async function main(): Promise<void> {
     // target zou het gegenereerde beeld ongemerkt een scène-pad inrollen
     if (cfg.TARGET !== "white") {
       throw new Error("--synth vereist --target white");
+    }
+    // een bestaande thumbnail is een goedgekeurd beeld en wordt nooit stil
+    // vervangen: elke hergeneratie is non-deterministisch en kan slechter
+    // uitvallen (gebeurd op 2026-07-30 — een prima thumbnail werd door een
+    // rerun met een gewijzigde referentieset overschreven). Hergenereren is
+    // een expliciete daad: verwijder het bestand eerst.
+    const existing = path.join(OUT_DIR, cli.synth, "thumbnail.jpg");
+    if (existsSync(existing)) {
+      console.log(
+        `thumbnail bestaat al: ${existing} — wordt niet vervangen. ` +
+          "Verwijder het bestand als je bewust wil hergenereren.",
+      );
+      return;
     }
     files = [await synthesizeAngle(cli.synth, cfg, cli)];
   } else if (cli.file) {
