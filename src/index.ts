@@ -101,7 +101,7 @@ function backgroundDeviation(cand: ChannelMeans, anchor: ChannelMeans): string |
   const dRG = Math.abs(cand.r / cand.g - anchor.r / anchor.g);
   const dBG = Math.abs(cand.b / cand.g - anchor.b / anchor.g);
   const parts: string[] = [];
-  if (ratio < 0.88 || ratio > 1.12) {
+  if (ratio < 0.94 || ratio > 1.06) {
     parts.push(
       `the studio background is ${ratio > 1 ? "lighter" : "darker"} than the anchor ` +
         `(luminance x${ratio.toFixed(2)}) — render the SAME light grey studio as the ` +
@@ -109,12 +109,11 @@ function backgroundDeviation(cand: ChannelMeans, anchor: ChannelMeans): string |
         "comes from the source photos only — never show the anchor's vehicle",
     );
   }
-  // 0.06 sinds de ID.3-runs: het model rendert de lichte studio consistent
-  // met ~0.045 koele zweem die visueel niet van het anker te onderscheiden
-  // is; strenger keurde bruikbare pogingen af en joeg de feedback-loop naar
-  // anker-lekkage. Het echte faalgeval (donkere bronstudio) meet ×0.70 op
-  // luminantie en blijft daar hangen.
-  if (dRG > 0.06 || dBG > 0.06) {
+  // streng (2026-07-30, besluit Yentl: elk beeld exact de EQE-belichting):
+  // de poort meet ná de deterministische normalisatie, dus binnen de
+  // gain-cap hoort het residu vrijwel nul te zijn — wat overblijft is een
+  // structureel ander decor en hoort afgekeurd
+  if (dRG > 0.03 || dBG > 0.03) {
     parts.push(
       `the studio background has a colour cast the anchor does not have ` +
         `(Δr/g ${dRG.toFixed(3)}, Δb/g ${dBG.toFixed(3)}) — the studio must be neutral ` +
@@ -123,6 +122,45 @@ function backgroundDeviation(cand: ChannelMeans, anchor: ChannelMeans): string |
     );
   }
   return parts.length > 0 ? parts.join("; ") : null;
+}
+
+/**
+ * Per-kanaal gains alléén op de autopixels toepassen, via de matte met een
+ * zachte rand. De lakcorrectie mag de achtergrond niet meer raken: die is
+ * zonet al exact op het anker genormaliseerd, en een globale gain zou hem
+ * weer wegtrekken.
+ */
+async function applyMaskedGains(
+  img: Buffer,
+  cutout: Buffer,
+  gains: [number, number, number],
+): Promise<Buffer> {
+  const meta = await sharp(img).metadata();
+  const width = meta.width ?? 1;
+  const height = meta.height ?? 1;
+  // het masker moet als écht alfakanaal aangehecht worden: een greyscale-PNG
+  // zonder alfa wordt door dest-in als volledig dekkend gelezen en dan zijn
+  // de "gemaskeerde" gains stiekem globaal (gemeten op de eerste batch: de
+  // achtergrond schoof exact mee met de lak-gains)
+  const maskRaw = await sharp(cutout)
+    .resize(width, height, { fit: "fill" })
+    .ensureAlpha()
+    .extractChannel(3)
+    .blur(1)
+    .raw()
+    .toBuffer();
+  // let op: geen removeAlpha in deze pipeline — sharp voert operaties in
+  // vaste interne volgorde uit en stript dan het zojuist aangehechte
+  // alfakanaal weer (gemeten: 3 kanalen uit, masker genegeerd)
+  const maskedCar = await sharp(img)
+    .linear(gains, [0, 0, 0])
+    .joinChannel(maskRaw, { raw: { width, height, channels: 1 } })
+    .png()
+    .toBuffer();
+  return sharp(img)
+    .composite([{ input: maskedCar }])
+    .jpeg({ quality: 97 })
+    .toBuffer();
 }
 
 /** Gemiddelde lakkleur van één beeld, gemeten op de matte-pixels. */
@@ -305,9 +343,24 @@ async function synthesizeAngle(
       );
       continue;
     }
-    // decor-poort vóór de (betaalde) inspecties: verkeerde studio = meteen
-    // opnieuw, met de meting als correctie-instructie
+    // belichting deterministisch naar het anker normaliseren: de gemeten
+    // achtergrondkleur wordt met per-kanaal gains exact op de anker-studio
+    // gelegd — zo is de belichting per constructie uniform over alle
+    // thumbnails, in plaats van te hopen dat het model 'm elke keer gelijk
+    // rendert. De cap houdt een structureel ander decor (donkere
+    // bronstudio) buiten bereik; dat vangt de poort hieronder.
     if (anchorBg) {
+      const candBg = await backgroundMeans(img);
+      const cap = 1.45;
+      const g = ([candBg.r, candBg.g, candBg.b].map((v, i) =>
+        Math.min(cap, Math.max(1 / cap, [anchorBg.r, anchorBg.g, anchorBg.b][i]! / Math.max(1e-6, v))),
+      )) as [number, number, number];
+      if (Math.max(...g.map((v) => Math.abs(v - 1))) > 0.015) {
+        img = await sharp(img)
+          .linear(g, [0, 0, 0])
+          .jpeg({ quality: 97 })
+          .toBuffer();
+      }
       const bgIssue = backgroundDeviation(await backgroundMeans(img), anchorBg);
       if (bgIssue) {
         console.warn(`  ⚠ synth-poging ${attempt + 1} verworpen (decor): ${bgIssue}`);
@@ -350,10 +403,8 @@ async function synthesizeAngle(
         verdict.issues.length === 0 && !prop.distorted
       ) {
         const gains = paintCorrectionGains(cand, srcMedian);
-        const corrected = await sharp(img)
-          .linear([gains[0], gains[1], gains[2]], [0, 0, 0])
-          .jpeg({ quality: 97 })
-          .toBuffer();
+        const candCutout = await getCutout(candPath, CACHE_DIR, cfg.FAL, cfg.MATTE, cli.useCache);
+        const corrected = await applyMaskedGains(img, candCutout, gains);
         const corrPath = path.join(
           CACHE_DIR, `synth-corrected-${cfg.SYNTH.seed + attempt}.jpg`,
         );
