@@ -21,6 +21,8 @@ export type QACode =
   | "PLATE_NOT_FOUND"
   | "AI_MASK_SUSPECT"
   | "AI_NOT_GROUNDED"
+  | "AI_DETAIL_LOSS"
+  | "SYNTH_IDENTITY"
   | "GENBG_REJECTED";
 
 export interface QAWarning {

@@ -46,11 +46,14 @@ import {
   visualYesNo,
 } from "./ai.js";
 import {
+  generateNovelView,
   generateScene,
   generateShowroomComposite,
   geminiStats,
   positioningGrid,
+  type ImagePart,
 } from "./gemini.js";
+import { compareAgainstSources, identifyVehicle } from "./identify.js";
 import { generateSceneQwen, qwenStats } from "./qwen.js";
 import {
   applyGreenhouse,
@@ -109,6 +112,14 @@ interface CliOptions {
   preset?: keyof Config["PRESETS"]; // fase 4: per-hoek kadrering
   /** Merk, model en uitvoering uit de listing, voor de relight-prompt. */
   vehicle?: string;
+  /**
+   * Auto-map waarvoor de ontbrekende Lizy-hoek (3/4 vóór-rechts) wordt
+   * gesynthetiseerd uit de aanwezige foto's. Het resultaat gaat daarna door
+   * de gewone deterministische pipeline voor kadrering, plaat en schaduw.
+   */
+  synth?: string;
+  /** Eindbeeld door Gemini langs de bron laten leggen op weggevallen details. */
+  checkDetails: boolean;
 }
 
 const MASK_PROMPT =
@@ -161,6 +172,8 @@ function parseCli(): { cfg: Config; cli: CliOptions } {
       plate: { type: "string" },
       preset: { type: "string" },
       target: { type: "string" },
+      synth: { type: "string" },
+      "check-details": { type: "boolean", default: false },
     },
   });
 
@@ -262,6 +275,8 @@ function parseCli(): { cfg: Config; cli: CliOptions } {
         values["car-width"] !== undefined ? cfg.CAR_WIDTH_RATIO : undefined,
       preset: values.preset as CliOptions["preset"],
       vehicle: vehicle || undefined,
+      synth: values.synth,
+      checkDetails: values["check-details"] ?? false,
     },
   };
 }
@@ -1875,6 +1890,105 @@ async function computeSetReferences(
   return refs;
 }
 
+function synthPrompt(spec: string, feedback: string[]): string {
+  let p =
+    `Create a professional catalogue photo of this exact vehicle: ${spec}.\n` +
+    "The attached photos are the ONLY truth for this vehicle's design: " +
+    "body, paint colour, wheels, badges, lights, grille, trim, mirrors and " +
+    "glass. Reconstruct the car from them — do not restyle, modernise or " +
+    "invent anything.\n" +
+    "ANGLE: three-quarter FRONT view with the front of the car on the " +
+    "RIGHT of the frame, roughly 30-35 degrees off axis, camera height " +
+    "1.0-1.3 m.\n" +
+    "BACKGROUND: pure white #FFFFFF edge to edge, studio catalogue style, " +
+    "only a small tight contact shadow under the tyres. Neutral studio " +
+    "reflections in the paint — no trees, no buildings.\n" +
+    "The whole car stays in frame with clear margin on every side. No " +
+    "people, no text, no watermark, no props. Licence plate: plain dark " +
+    "plate without readable characters.";
+  if (feedback.length > 0) {
+    p +=
+      "\nA previous attempt was rejected by inspection for these " +
+      "deviations — correct every one of them:\n" +
+      feedback.map((f) => `- ${f}`).join("\n");
+  }
+  return p;
+}
+
+/**
+ * De ontbrekende catalogushoek genereren uit de foto's die er wél zijn.
+ *
+ * Volledige generatie, dus dubbel bewaakt: Gemini identificeert eerst het
+ * exacte model uit de set, en elke kandidaat moet daarna door een
+ * inspecteursvergelijking tegen de bronfoto's (zelfde model, zelfde velgen,
+ * geen weggevallen of verzonnen details). Afwijkingen gaan als feedback de
+ * volgende poging in. Zonder overtuigende kandidaat wordt er niets
+ * geschreven. Het geaccepteerde beeld gaat daarna als gewone input door de
+ * deterministische pipeline — kadrering, plaat en schaduw blijven code.
+ */
+async function synthesizeAngle(
+  dir: string,
+  cfg: Config,
+  cli: CliOptions,
+): Promise<string> {
+  const all = await findImages(IN_DIR);
+  const refFiles = all.filter(
+    (f) => path.dirname(f) === dir && !path.basename(f).startsWith("_synth"),
+  );
+  if (refFiles.length === 0) {
+    throw new Error(`geen bronfoto's gevonden in ${IN_DIR}/${dir}/`);
+  }
+  const refs: ImagePart[] = [];
+  for (const f of refFiles) {
+    refs.push({
+      data: await readFile(path.join(IN_DIR, f)),
+      mime: f.toLowerCase().endsWith(".png") ? "image/png" : "image/jpeg",
+    });
+  }
+  const spec = await identifyVehicle(refs, cfg.GEMINI, CACHE_DIR, cli.useCache);
+  console.log(`  voertuig: ${spec}`);
+
+  let best: { img: Buffer; issues: string[] } | null = null;
+  let feedback: string[] = [];
+  for (let attempt = 0; attempt < cfg.GENBG.maxAttempts; attempt++) {
+    const img = await generateNovelView(
+      refs, synthPrompt(spec, feedback), cfg.GEMINI, CACHE_DIR, cli.useCache,
+      cfg.GENBG.seed + attempt,
+    );
+    const verdict = await compareAgainstSources(
+      { data: img }, refs, spec, cfg.GEMINI, CACHE_DIR, cli.useCache,
+    );
+    if (
+      verdict.sameVehicle &&
+      (best === null || verdict.issues.length < best.issues.length)
+    ) {
+      best = { img, issues: verdict.issues };
+    }
+    if (verdict.sameVehicle && verdict.issues.length === 0) break;
+    console.warn(
+      `  ⚠ synth-poging ${attempt + 1} ` +
+        (verdict.sameVehicle ? "met afwijkingen" : "afgekeurd (andere auto)") +
+        `: ${verdict.issues.join("; ") || "(geen detail opgegeven)"}`,
+    );
+    if (verdict.issues.length > 0) feedback = verdict.issues;
+  }
+  if (!best) {
+    throw new Error(
+      `synthese na ${cfg.GENBG.maxAttempts} pogingen afgekeurd — geen enkele ` +
+        "kandidaat was overtuigend dezelfde auto; er wordt niets gepubliceerd",
+    );
+  }
+  if (best.issues.length > 0) {
+    console.warn(
+      `  ⚠ [SYNTH_IDENTITY] beste kandidaat houdt afwijkingen: ${best.issues.join("; ")}`,
+    );
+  }
+  const rel = path.join(dir, "_synth-front34.jpg");
+  await writeFile(path.join(IN_DIR, rel), best.img);
+  console.log(`  gesynthetiseerde hoek: in/${rel} → door de deterministische pipeline`);
+  return rel;
+}
+
 async function main(): Promise<void> {
   const { cfg, cli } = parseCli();
   for (const dir of [IN_DIR, OUT_DIR, DEBUG_DIR, CACHE_DIR, BG_DIR]) {
@@ -1883,7 +1997,14 @@ async function main(): Promise<void> {
   const backgroundPath = await resolveBackground(cli, cfg);
 
   let files: string[];
-  if (cli.file) {
+  if (cli.synth) {
+    // synthese is er alleen voor de witte listing-cutout; op een andere
+    // target zou het gegenereerde beeld ongemerkt een scène-pad inrollen
+    if (cfg.TARGET !== "white") {
+      throw new Error("--synth vereist --target white");
+    }
+    files = [await synthesizeAngle(cli.synth, cfg, cli)];
+  } else if (cli.file) {
     if (!existsSync(path.join(IN_DIR, cli.file))) {
       throw new Error(`bestand niet gevonden: ${path.join(IN_DIR, cli.file)}`);
     }
@@ -1928,6 +2049,39 @@ async function main(): Promise<void> {
         : String(err);
       console.error(`  ✗ ${file}: ${message}`);
       results.push({ file, ok: false, error: message, warnings: [] });
+    }
+  }
+
+  // detailcontrole achteraf: het eindbeeld langs de bron leggen en laten
+  // benoemen wat er is weggevallen (matte at de antenne op, sierlijst weg).
+  // Bewust ná de batch: de vergelijking verandert niets aan de beelden, ze
+  // maakt het verlies alleen zichtbaar in de samenvatting.
+  if (cli.checkDetails) {
+    for (const r of results) {
+      if (!r.ok) continue;
+      const outPath = path.join(
+        OUT_DIR, path.parse(r.file).dir, path.parse(r.file).name + ".jpg",
+      );
+      if (!existsSync(outPath)) continue;
+      try {
+        const source = await readFile(path.join(IN_DIR, r.file));
+        const final = await readFile(outPath);
+        const spec = await identifyVehicle(
+          [{ data: source }], cfg.GEMINI, CACHE_DIR, cli.useCache,
+        );
+        const verdict = await compareAgainstSources(
+          { data: final }, [{ data: source }], spec,
+          cfg.GEMINI, CACHE_DIR, cli.useCache,
+        );
+        for (const issue of verdict.issues) {
+          console.warn(`  ⚠ ${r.file}: [AI_DETAIL_LOSS] ${issue}`);
+          r.warnings.push({ code: "AI_DETAIL_LOSS", message: issue });
+        }
+      } catch (err) {
+        console.warn(
+          `  ⚠ ${r.file}: detailcontrole mislukt: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
     }
   }
 

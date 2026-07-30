@@ -98,6 +98,109 @@ export async function generateScene(
   return scene;
 }
 
+export interface ImagePart {
+  data: Buffer;
+  mime?: string; // default image/jpeg
+}
+
+function toImageInput(p: ImagePart): { type: string; mime_type: string; data: string } {
+  return {
+    type: "image",
+    mime_type: p.mime ?? "image/jpeg",
+    data: p.data.toString("base64"),
+  };
+}
+
+/**
+ * Tekstantwoord van Gemini over één of meer beelden (identificatie,
+ * vergelijking). Zelfde route en cache-strategie als de beeldcalls.
+ */
+export async function geminiText(
+  images: ImagePart[],
+  prompt: string,
+  cfg: GeminiConfig,
+  cacheDir: string,
+  useCache: boolean,
+): Promise<string> {
+  const h = createHash("sha256").update(prompt).update(cfg.modelId);
+  for (const i of images) h.update(i.data);
+  const cachePath = path.join(cacheDir, `${h.digest("hex")}.gtext.json`);
+  if (useCache && existsSync(cachePath)) {
+    geminiStats.cacheHits++;
+    return (JSON.parse(await readFile(cachePath, "utf8")) as { text: string }).text;
+  }
+
+  const client = getClient(cfg);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const interactions: any = client.interactions;
+  const interaction = await interactions.create({
+    model: cfg.modelId,
+    input: [{ type: "text", text: prompt }, ...images.map(toImageInput)],
+  });
+  geminiStats.calls++;
+
+  const text = interaction.output_text;
+  if (typeof text !== "string" || text.length === 0) {
+    throw new Error(
+      `Gemini gaf geen tekst terug: ${JSON.stringify(interaction).slice(0, 300)}`,
+    );
+  }
+  await writeFile(cachePath, JSON.stringify({ text }));
+  return text;
+}
+
+/**
+ * Nieuwe kijkhoek van dezelfde auto, gereconstrueerd uit de bronfoto's.
+ *
+ * Dit is bewust volledige generatie — de enige route wanneer de gevraagde
+ * hoek niet geschoten is. De bewaking zit niet in de prompt maar eromheen:
+ * de aanroeper legt het resultaat langs de bronfoto's (identiteitscheck) en
+ * de kadrering komt daarna uit de deterministische compositing, niet uit
+ * dit beeld.
+ */
+export async function generateNovelView(
+  refs: ImagePart[],
+  prompt: string,
+  cfg: GeminiConfig,
+  cacheDir: string,
+  useCache: boolean,
+  seed: number,
+): Promise<Buffer> {
+  const h = createHash("sha256").update(prompt).update(cfg.modelId).update(String(seed));
+  for (const r of refs) h.update(r.data);
+  const cachePath = path.join(cacheDir, `${h.digest("hex")}.synth.jpg`);
+  if (useCache && existsSync(cachePath)) {
+    geminiStats.cacheHits++;
+    return readFile(cachePath);
+  }
+
+  const client = getClient(cfg);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const interactions: any = client.interactions;
+  const interaction = await interactions.create({
+    model: cfg.modelId,
+    input: [{ type: "text", text: prompt }, ...refs.map(toImageInput)],
+    response_format: {
+      type: "image",
+      mime_type: "image/jpeg",
+      aspect_ratio: cfg.aspectRatio,
+      image_size: cfg.imageSize,
+    },
+    generation_config: { seed },
+  });
+  geminiStats.calls++;
+
+  const out = interaction.output_image;
+  if (!out?.data) {
+    throw new Error(
+      `Gemini gaf geen beeld terug: ${JSON.stringify(interaction).slice(0, 300)}`,
+    );
+  }
+  const img = Buffer.from(out.data, "base64");
+  await writeFile(cachePath, img);
+  return img;
+}
+
 export interface TargetRect {
   left: number;
   top: number;
