@@ -57,8 +57,10 @@ export async function compareAgainstSources(
     "versus body length, roof height, overhangs and wheel size must match " +
     "the sources — a stretched, squashed or otherwise distorted body is a " +
     "mismatch. List every detail that is missing, changed, invented or " +
-    "distorted in the candidate. Ignore background, framing, shadow and " +
-    "licence-plate contents — those are handled elsewhere.\n" +
+    "distorted in the candidate. Ignore background, framing and shadow. " +
+    "The candidate intentionally carries a Carredo dealer plate instead of " +
+    "the original licence plate — never report the plate as a difference; " +
+    "it is checked elsewhere.\n" +
     "Judge the paint colour SEPARATELY and strictly: compare hue, " +
     "lightness and metallic character. A silver car that renders white or " +
     "cream, a grey that loses its blue cast, or any colour shift relative " +
@@ -146,6 +148,60 @@ export async function checkProportions(
   }
   const bad = /"?distorted"?\s*[:=]?\s*true|^\s*yes\b/i.test(raw);
   return { distorted: bad, why: bad ? raw.slice(0, 300) : "" };
+}
+
+export interface PlateVerdict {
+  plateOk: boolean;
+  issues: string[];
+}
+
+/**
+ * Plaat-poort: het model monteert de Carredo-plaat zelf tijdens de
+ * generatie, dus er moet een aparte controle op zitten dat het resultaat
+ * het asset exact reproduceert — op ware grootte, niet uitgerekt, in het
+ * perspectief van de bumper. Een fout logo of vervormde tekst is een
+ * afkeuring, geen schoonheidsfoutje.
+ */
+export async function checkPlate(
+  candidate: ImagePart,
+  plateAsset: ImagePart,
+  cfg: GeminiConfig,
+  cacheDir: string,
+  useCache: boolean,
+): Promise<PlateVerdict> {
+  const prompt =
+    "The FIRST image is a candidate catalogue photo of a car. The SECOND " +
+    "image is the exact Carredo dealer plate that must be mounted on its " +
+    "front.\n" +
+    "Verify the plate on the car: (1) it reproduces the reference exactly " +
+    "— logo mark, 'Carredo' wordmark, and the green-to-blue leasing strip " +
+    "at the bottom, all legible and undistorted; (2) it is NOT stretched, " +
+    "squashed or warped out of its natural proportions; (3) its size is " +
+    "realistic for a standard European front plate on this car (about " +
+    "52 cm wide in reality — roughly a third of the car's width, never " +
+    "spanning the whole grille); (4) it sits in the car's plate position, " +
+    "angled consistently with the bumper perspective.\n" +
+    'Answer with STRICT JSON only, no code fences: {"plate_ok": boolean, ' +
+    '"issues": string[]} — issues stays empty when the plate is correct.';
+  const raw = await geminiText(
+    [candidate, plateAsset], prompt, cfg, cacheDir, useCache,
+  );
+  const match = raw.match(/\{[\s\S]*\}/);
+  if (match) {
+    try {
+      const obj = JSON.parse(match[0]) as { plate_ok?: unknown; issues?: unknown };
+      return {
+        plateOk: obj.plate_ok === true,
+        issues: Array.isArray(obj.issues)
+          ? obj.issues.filter((i): i is string => typeof i === "string")
+          : [],
+      };
+    } catch {
+      // valt door naar de tekstheuristiek
+    }
+  }
+  const ok = /"?plate_ok"?\s*[:=]?\s*true|^\s*yes\b/i.test(raw);
+  return { plateOk: ok, issues: ok ? [] : [raw.slice(0, 300)] };
 }
 
 const luma = (m: ChannelMeans): number => 0.2126 * m.r + 0.7152 * m.g + 0.0722 * m.b;

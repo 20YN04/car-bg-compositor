@@ -7,6 +7,7 @@ import sharp from "sharp";
 import { defaultConfig, type Config } from "./config.js";
 import { geminiStats, generateNovelView, type ImagePart } from "./gemini.js";
 import {
+  checkPlate,
   checkProportions,
   compareAgainstSources,
   identifyVehicle,
@@ -76,7 +77,12 @@ async function paintMeansOf(
   return cutoutMeans(data, alpha, info.width, info.height);
 }
 
-function synthPrompt(spec: string, feedback: string[], hasAnchor: boolean): string {
+function synthPrompt(
+  spec: string,
+  feedback: string[],
+  hasAnchor: boolean,
+  hasPlate: boolean,
+): string {
   let p = `Create a professional catalogue photo of this exact vehicle: ${spec}.\n`;
   if (hasAnchor) {
     p +=
@@ -108,11 +114,20 @@ function synthPrompt(spec: string, feedback: string[], hasAnchor: boolean): stri
     "reflections in the paint — no trees, no buildings.\n" +
     "The car fills about three quarters of the frame width, horizontally " +
     "centred, whole car in frame with clear margin on every side. No " +
-    "people, no text, no watermark, no props.\n" +
-    "LICENCE PLATE: an empty blank pale-grey front plate in correct " +
-    "European proportions — a WIDE SHORT rectangle, about 4.5 times wider " +
-    "than tall, mounted flat where this car model carries its front plate. " +
-    "No characters, no frame taller than the plate itself.";
+    "people, no watermark, no props.\n" +
+    (hasPlate
+      ? "LICENCE PLATE: the LAST attached image is the exact Carredo " +
+        "dealer plate (white plate, blue Carredo wordmark, holder with a " +
+        "green-to-blue leasing strip at the bottom). Mount THIS plate on " +
+        "the front of the car, in the car's own plate position, at " +
+        "REALISTIC size — a standard European front plate, about 52 cm " +
+        "wide on the real car — angled with the bumper perspective. " +
+        "Reproduce the logo, wordmark and strip EXACTLY as in the " +
+        "reference; never stretch, squash or enlarge the plate beyond " +
+        "its natural size."
+      : "LICENCE PLATE: an empty blank pale-grey front plate in correct " +
+        "European proportions — a WIDE SHORT rectangle, about 4.5 times " +
+        "wider than tall. No characters.");
   if (feedback.length > 0) {
     p +=
       "\nA previous attempt was rejected by inspection for these " +
@@ -155,9 +170,10 @@ async function synthesizeAngle(
   const spec = await identifyVehicle(refs, cfg.GEMINI, CACHE_DIR, cli.useCache);
   console.log(`  voertuig: ${spec}`);
 
-  // compositie-anker vooraan in de invoer; de bronfoto's volgen erna. De
-  // inspecties vergelijken uitsluitend tegen de bronfoto's, dus het anker
-  // kan daar geen identiteit in lekken.
+  // compositie-anker vooraan in de invoer, plaat-asset achteraan; de
+  // bronfoto's zitten ertussen. De identiteitsinspecties vergelijken
+  // uitsluitend tegen de bronfoto's, dus anker en plaat kunnen daar geen
+  // identiteit in lekken.
   let genRefs = refs;
   let hasAnchor = false;
   if (existsSync(cfg.SYNTH.anchorPath)) {
@@ -166,6 +182,15 @@ async function synthesizeAngle(
   } else {
     console.warn(
       `  ⚠ compositie-anker ontbreekt (${cfg.SYNTH.anchorPath}) — kadrering kan per auto verschillen`,
+    );
+  }
+  let plateAsset: ImagePart | null = null;
+  if (existsSync(cfg.PLATE.assetPath)) {
+    plateAsset = { data: await readFile(cfg.PLATE.assetPath), mime: "image/png" };
+    genRefs = [...genRefs, plateAsset];
+  } else {
+    console.warn(
+      `  ⚠ plaat-asset ontbreekt (${cfg.PLATE.assetPath}) — auto krijgt een lege plaat`,
     );
   }
 
@@ -193,8 +218,8 @@ async function synthesizeAngle(
   let feedback: string[] = [];
   for (let attempt = 0; attempt < cfg.SYNTH.maxAttempts; attempt++) {
     let img = await generateNovelView(
-      genRefs, synthPrompt(spec, feedback, hasAnchor), cfg.GEMINI, CACHE_DIR,
-      cli.useCache, cfg.SYNTH.seed + attempt,
+      genRefs, synthPrompt(spec, feedback, hasAnchor, plateAsset !== null),
+      cfg.GEMINI, CACHE_DIR, cli.useCache, cfg.SYNTH.seed + attempt,
     );
     // harde dimensiepoort vóór de (betaalde) inspectie: het model rendert
     // alleen op zijn eigen vaste raster (3:2@2K = 2528×1696, gemeten
@@ -216,6 +241,12 @@ async function synthesizeAngle(
     const prop = await checkProportions(
       { data: img }, refs, spec, cfg.GEMINI, CACHE_DIR, cli.useCache,
     );
+    // plaat-poort: het model monteert de plaat zelf, dus er moet een aparte
+    // controle op zitten dat logo/tekst exact kloppen en de plaat niet
+    // uitgerekt of buitenmaats is
+    const plate = plateAsset
+      ? await checkPlate({ data: img }, plateAsset, cfg.GEMINI, CACHE_DIR, cli.useCache)
+      : { plateOk: true, issues: [] };
     // deterministische lakmeting naast de VLM-inspectie: zilver dat wit
     // rendert kwam door de inspectie heen, maar niet door de meting
     let paintIssue: string | null = null;
@@ -258,9 +289,11 @@ async function synthesizeAngle(
       ...(prop.distorted
         ? [`body proportions are wrong: ${prop.why || "stretched or compressed versus the sources"}`]
         : []),
+      ...plate.issues.map((i) => `licence plate: ${i}`),
     ];
     const acceptable =
-      verdict.sameVehicle && verdict.paintMatch && paintIssue === null && !prop.distorted;
+      verdict.sameVehicle && verdict.paintMatch && paintIssue === null &&
+      !prop.distorted && plate.plateOk;
     if (acceptable && (best === null || verdict.issues.length < best.issues.length)) {
       best = { img, issues: verdict.issues };
     }
@@ -272,7 +305,9 @@ async function synthesizeAngle(
             ? "met afwijkingen"
             : prop.distorted
               ? "afgekeurd (proporties)"
-              : "afgekeurd (lak)"
+              : !plate.plateOk
+                ? "afgekeurd (plaat)"
+                : "afgekeurd (lak)"
           : "afgekeurd (andere auto)") +
         `: ${allIssues.join("; ") || "(geen detail opgegeven)"}`,
     );
@@ -351,17 +386,10 @@ async function main(): Promise<void> {
   }
 
   console.log(`→ ${cli.synth}`);
-  let accepted = await synthesizeAngle(cli.synth, cfg, cli);
-
-  // de Carredo-plaat deterministisch op de gegenereerde houder warpen —
-  // leesbare tekst komt nooit uit het model. Faalt de montage, dan wordt de
-  // plaatloze thumbnail gewoon gepubliceerd, met een luide melding.
-  const mount = await mountPlate(accepted, cfg.PLATE, CACHE_DIR, cli.useCache);
-  if (mount.mounted) {
-    accepted = mount.image;
-  } else {
-    console.warn(`  ⚠ plaat niet gemonteerd: ${mount.reason} — thumbnail zonder plaat`);
-  }
+  // de plaat zit sinds 2026-07-30 ín de generatie (asset als referentie +
+  // eigen poort); de deterministische naderhand-montage bestaat alleen nog
+  // als handmatige --mount-plate voor beelden zonder plaat
+  const accepted = await synthesizeAngle(cli.synth, cfg, cli);
 
   // het goedgekeurde studiobeeld ÍS het eindresultaat (besluit 2026-07-30):
   // geen hercompositing, plaathouder blijft zoals gegenereerd. Publiceren =
