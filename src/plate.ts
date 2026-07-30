@@ -64,6 +64,59 @@ export async function florenceBoxes(
   return boxes;
 }
 
+/**
+ * Strak plaatkader voor de lakcorrectie-uitsluiting: exact zo groot als de
+ * plaat zelf. De rauwe Florence-box pakt geregeld de hele houderzone (of
+ * meer), en een te ruime uitsluiting laat een rechthoek óngecorrigeerde lak
+ * rond de plaat staan. Voorkeursroute: SAM2-vlak → bbox van het quad.
+ * Fallback: de detectiebox verticaal geklemd op plaatverhouding.
+ */
+export async function tightPlateBox(
+  imageBytes: Buffer,
+  cfg: PlateConfig,
+  cacheDir: string,
+  useCache: boolean,
+): Promise<PlateBox | null> {
+  const meta = await sharp(imageBytes).metadata();
+  const W = meta.width ?? 0;
+  const H = meta.height ?? 0;
+  if (W === 0 || H === 0) return null;
+  const boxes = await detectPlateBoxes(imageBytes, cfg, cacheDir, useCache);
+  const box = boxes
+    .filter((b) => b.w / Math.max(1, b.h) >= 1.2 && b.w / Math.max(1, b.h) <= 9)
+    .filter((b) => b.y + b.h / 2 > H * 0.5)
+    .sort((a, b) => b.w * b.h - a.w * a.h)[0];
+  if (!box) return null;
+  try {
+    const maskPng = await segmentByBox(imageBytes, box, cfg, cacheDir, useCache);
+    const raw = await sharp(maskPng)
+      .resize(W, H, { fit: "fill" })
+      .greyscale()
+      .raw()
+      .toBuffer();
+    const quad = plateQuadFromMask(
+      new Uint8Array(raw.buffer, raw.byteOffset, W * H), W, H, box,
+    );
+    if (quad) {
+      const xs = [quad.tl.x, quad.tr.x, quad.bl.x, quad.br.x];
+      const ys = [quad.tl.y, quad.tr.y, quad.bl.y, quad.br.y];
+      return {
+        x: Math.min(...xs),
+        y: Math.min(...ys),
+        w: Math.max(...xs) - Math.min(...xs),
+        h: Math.max(...ys) - Math.min(...ys),
+      };
+    }
+  } catch {
+    // box-fallback hieronder
+  }
+  if (box.h > box.w / 3.2) {
+    const nh = box.w / 3.2;
+    return { x: box.x, y: box.y + (box.h - nh) / 2, w: box.w, h: nh };
+  }
+  return box;
+}
+
 /** Plaathouder-boxen in het beeld. */
 export async function detectPlateBoxes(
   imageBytes: Buffer,

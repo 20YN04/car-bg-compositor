@@ -19,7 +19,7 @@ import { getCutout, maskStats, noteFalFailure } from "./mask.js";
 import { cutoutMeans, medianMeans, type ChannelMeans } from "./measure.js";
 import { measureFill, normalizeScale, replaceBackground } from "./background.js";
 import { checkGeometry, wheelbaseRatio } from "./geometry.js";
-import { detectPlateBoxes, mountPlate } from "./plate.js";
+import { mountPlate, tightPlateBox } from "./plate.js";
 
 const IN_DIR = "./in";
 const OUT_DIR = "./out";
@@ -154,12 +154,12 @@ async function applyMaskedGains(
     .raw()
     .toBuffer();
   if (excludeBox) {
-    // plaatzone (met marge) uit het gain-masker: de lakcorrectie bestaat om
-    // lakdrift te repareren, maar verkleurde de witte Carredo-plaat mee
-    const x0 = Math.max(0, Math.round(excludeBox.x - excludeBox.w * 0.1));
-    const x1 = Math.min(width - 1, Math.round(excludeBox.x + excludeBox.w * 1.1));
-    const y0 = Math.max(0, Math.round(excludeBox.y - excludeBox.h * 0.15));
-    const y1 = Math.min(height - 1, Math.round(excludeBox.y + excludeBox.h * 1.15));
+    // plaatzone uit het gain-masker — exact op plaatmaat (2% marge): een
+    // ruimere zone liet een rechthoek ongecorrigeerde lak rond de plaat staan
+    const x0 = Math.max(0, Math.round(excludeBox.x - excludeBox.w * 0.02));
+    const x1 = Math.min(width - 1, Math.round(excludeBox.x + excludeBox.w * 1.02));
+    const y0 = Math.max(0, Math.round(excludeBox.y - excludeBox.h * 0.02));
+    const y1 = Math.min(height - 1, Math.round(excludeBox.y + excludeBox.h * 1.02));
     for (let y = y0; y <= y1; y++) {
       for (let x = x0; x <= x1; x++) maskRaw[y * width + x] = 0;
     }
@@ -523,16 +523,12 @@ async function synthesizeAngle(
       ) {
         const gains = paintCorrectionGains(cand, srcMedian);
         // de plaat uit de correctie houden: zonder exclusie kreeg de witte
-        // Carredo-plaat de donker-gains van de koets mee
+        // Carredo-plaat de donker-gains van de koets mee. Strak op
+        // plaatmaat via het SAM2-vlak — een ruime box liet een rechthoek
+        // ongecorrigeerde lak rond de plaat staan.
         let plateBox: { x: number; y: number; w: number; h: number } | null = null;
         try {
-          const dims2 = await sharp(img).metadata();
-          const boxes = await detectPlateBoxes(img, cfg.PLATE, CACHE_DIR, cli.useCache);
-          plateBox =
-            boxes
-              .filter((b) => b.w / Math.max(1, b.h) >= 1.5 && b.w / Math.max(1, b.h) <= 9)
-              .filter((b) => b.y + b.h / 2 > (dims2.height ?? 0) * 0.5)
-              .sort((a, b) => b.w * b.h - a.w * a.h)[0] ?? null;
+          plateBox = await tightPlateBox(img, cfg.PLATE, CACHE_DIR, cli.useCache);
         } catch {
           // zonder box corrigeert de gain ook de plaat — jammer maar geen blokkade
         }
