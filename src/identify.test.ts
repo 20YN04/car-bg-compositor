@@ -55,8 +55,8 @@ describe("paintCorrectionGains", () => {
 
   it("de cap blokkeert een fundamenteel verkeerde kleur", () => {
     const g = paintCorrectionGains({ r: 200, g: 60, b: 60 }, { r: 117, g: 120, b: 132 });
-    expect(g[0]).toBeCloseTo(1 / 1.3, 5);
-    expect(g[1]).toBeCloseTo(1.3, 5);
+    expect(g[0]).toBeCloseTo(1 / 1.45, 5);
+    expect(g[1]).toBeCloseTo(1.45, 5);
   });
 });
 

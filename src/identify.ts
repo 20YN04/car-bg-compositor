@@ -174,8 +174,11 @@ export async function checkPlate(
     "image is the exact Carredo dealer plate that must be mounted on its " +
     "front.\n" +
     "Verify the plate on the car: (1) it reproduces the reference exactly " +
-    "— logo mark, 'Carredo' wordmark, and the green-to-blue leasing strip " +
-    "at the bottom, all legible and undistorted; (2) it is NOT stretched, " +
+    "— the blue wing logo mark followed by the blue lowercase-style " +
+    "'Carredo' logotype on a white plate, plus the green-to-blue leasing " +
+    "strip at the bottom. A plate with plain dark CAPITAL letters " +
+    "'CARREDO', a missing wing mark, a missing strip, or any other " +
+    "typography than the reference is WRONG; (2) it is NOT stretched, " +
     "squashed or warped out of its natural proportions; (3) its size is " +
     "realistic for a standard European front plate on this car (about " +
     "52 cm wide in reality — roughly a third of the car's width, never " +
@@ -219,15 +222,17 @@ const luma = (m: ChannelMeans): number => 0.2126 * m.r + 0.7152 * m.g + 0.0722 *
  * Per-kanaal gains die de kandidaat-lak op de bron-mediaan leggen.
  *
  * Corrigeren in plaats van afkeuren: de meting weet exact hóe de lak
- * afwijkt, en een lineaire gain per kanaal is dezelfde klasse ingreep als
- * harmonize — pure curves, geen generatieve stap. De cap voorkomt dat een
- * fundamenteel verkeerde kleur (rood i.p.v. zilver) stilletjes "gecorrigeerd"
- * wordt: zo'n kandidaat hoort door de meting afgekeurd te blijven.
+ * afwijkt, en een lineaire gain per kanaal is pure curves, geen generatieve
+ * stap. De cap voorkomt dat een fundamenteel verkeerde kleur (rood i.p.v.
+ * zilver) stilletjes "gecorrigeerd" wordt. 1.45 sinds de ID.3-case
+ * (2026-07-30): bronfoto's in een donkere studio tegenover een synthese in
+ * de lichte ankerstudio geven legitiem ×1.4 lichtheidsverschil, en achter
+ * de correctie staat nu sowieso een her-inspectie én een nameting.
  */
 export function paintCorrectionGains(
   candidate: ChannelMeans,
   reference: ChannelMeans,
-  cap = 1.3,
+  cap = 1.45,
 ): [number, number, number] {
   const g = (c: number, r: number) =>
     Math.min(cap, Math.max(1 / cap, r / Math.max(1e-6, c)));

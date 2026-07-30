@@ -60,6 +60,71 @@ function parseCli(): { cfg: Config; cli: CliOptions } {
   };
 }
 
+/**
+ * Gemiddelde kleur van de studio-achtergrond: bovenste strook plus de
+ * bovenhelften van de zijranden (de vloer is by design donkerder en blijft
+ * buiten de meting). Gemeten op een verkleind beeld — de achtergrond is een
+ * egaal verloop, dus 64px breed volstaat.
+ */
+async function backgroundMeans(img: Buffer): Promise<ChannelMeans> {
+  const { data, info } = await sharp(img)
+    .resize(64, 43, { fit: "fill" })
+    .removeAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  let r = 0, g = 0, b = 0, n = 0;
+  const px = (x: number, y: number) => {
+    const p = (y * info.width + x) * 3;
+    r += data[p] ?? 0;
+    g += data[p + 1] ?? 0;
+    b += data[p + 2] ?? 0;
+    n++;
+  };
+  for (let y = 0; y < 7; y++) for (let x = 0; x < info.width; x++) px(x, y);
+  for (let y = 7; y < 24; y++) {
+    for (let x = 0; x < 5; x++) px(x, y);
+    for (let x = info.width - 5; x < info.width; x++) px(x, y);
+  }
+  return { r: r / n, g: g / n, b: b / n };
+}
+
+/**
+ * Deterministische decor-poort: de studio van de kandidaat moet die van het
+ * anker zijn. De bronfoto's zijn zelf professionele studiobeelden met een
+ * eigen (donkerder/warmer) decor, en met tien van die referenties overstemde
+ * dat het anker — de ID.3 kwam in de bron-studio terug, de e-tron met een
+ * beige zweem. Meten in plaats van hopen.
+ */
+function backgroundDeviation(cand: ChannelMeans, anchor: ChannelMeans): string | null {
+  const luma = (m: ChannelMeans) => 0.2126 * m.r + 0.7152 * m.g + 0.0722 * m.b;
+  const ratio = luma(cand) / Math.max(1e-6, luma(anchor));
+  const dRG = Math.abs(cand.r / cand.g - anchor.r / anchor.g);
+  const dBG = Math.abs(cand.b / cand.g - anchor.b / anchor.g);
+  const parts: string[] = [];
+  if (ratio < 0.88 || ratio > 1.12) {
+    parts.push(
+      `the studio background is ${ratio > 1 ? "lighter" : "darker"} than the anchor ` +
+        `(luminance x${ratio.toFixed(2)}) — render the SAME light grey studio as the ` +
+        "anchor image, never the background of the source photos. The VEHICLE still " +
+        "comes from the source photos only — never show the anchor's vehicle",
+    );
+  }
+  // 0.06 sinds de ID.3-runs: het model rendert de lichte studio consistent
+  // met ~0.045 koele zweem die visueel niet van het anker te onderscheiden
+  // is; strenger keurde bruikbare pogingen af en joeg de feedback-loop naar
+  // anker-lekkage. Het echte faalgeval (donkere bronstudio) meet ×0.70 op
+  // luminantie en blijft daar hangen.
+  if (dRG > 0.06 || dBG > 0.06) {
+    parts.push(
+      `the studio background has a colour cast the anchor does not have ` +
+        `(Δr/g ${dRG.toFixed(3)}, Δb/g ${dBG.toFixed(3)}) — the studio must be neutral ` +
+        "light grey like the anchor. The VEHICLE still comes from the source photos " +
+        "only — never show the anchor's vehicle",
+    );
+  }
+  return parts.length > 0 ? parts.join("; ") : null;
+}
+
 /** Gemiddelde lakkleur van één beeld, gemeten op de matte-pixels. */
 async function paintMeansOf(
   filePath: string,
@@ -94,7 +159,9 @@ function synthPrompt(
       "proportions from the source photos — a longer vehicle simply takes " +
       "more room in the frame. NEVER compress, shorten or squash the body " +
       "to fit the anchor's footprint. Take ZERO vehicle design details " +
-      "from the anchor — no body parts, no wheels, no badges.\n" +
+      "from the anchor — no body parts, no wheels, no badges. If your " +
+      "output shows the anchor's vehicle (or a blend of it) instead of the " +
+      "source vehicle, the image is invalid.\n" +
       "All OTHER images are source photos of the vehicle to reconstruct; ";
   } else {
     p += "The attached photos are source photos of the vehicle to reconstruct; ";
@@ -111,7 +178,10 @@ function synthPrompt(
     "BACKGROUND: a seamless light grey photo studio (wall around #f0f2f4 " +
     "fading into a slightly darker smooth floor), a soft contact shadow " +
     "under the tyres and a subtle floor reflection. Neutral studio " +
-    "reflections in the paint — no trees, no buildings.\n" +
+    "reflections in the paint — no trees, no buildings. NEVER copy the " +
+    "background, floor, lighting mood or any watermark from the source " +
+    "photos — the studio comes ONLY from the anchor. Render no watermark, " +
+    "no logo overlay and no floating text anywhere in the image.\n" +
     "The car fills about three quarters of the frame width, horizontally " +
     "centred, whole car in frame with clear margin on every side. No " +
     "people, no watermark, no props.\n" +
@@ -214,6 +284,8 @@ async function synthesizeAngle(
     );
   }
 
+  const anchorBg = hasAnchor ? await backgroundMeans(genRefs[0]!.data) : null;
+
   let best: { img: Buffer; issues: string[] } | null = null;
   let feedback: string[] = [];
   for (let attempt = 0; attempt < cfg.SYNTH.maxAttempts; attempt++) {
@@ -233,7 +305,17 @@ async function synthesizeAngle(
       );
       continue;
     }
-    const verdict = await compareAgainstSources(
+    // decor-poort vóór de (betaalde) inspecties: verkeerde studio = meteen
+    // opnieuw, met de meting als correctie-instructie
+    if (anchorBg) {
+      const bgIssue = backgroundDeviation(await backgroundMeans(img), anchorBg);
+      if (bgIssue) {
+        console.warn(`  ⚠ synth-poging ${attempt + 1} verworpen (decor): ${bgIssue}`);
+        feedback = [bgIssue];
+        continue;
+      }
+    }
+    let verdict = await compareAgainstSources(
       { data: img }, refs, spec, cfg.GEMINI, CACHE_DIR, cli.useCache,
     );
     // aparte proportie-poort: in de brede inspectie verdronk deze vraag en
@@ -255,12 +337,18 @@ async function synthesizeAngle(
       await writeFile(candPath, img);
       const cand = await paintMeansOf(candPath, cfg, cli.useCache);
       paintIssue = paintDeviation(cand, srcMedian, cfg.SYNTH);
-      // corrigeren i.p.v. afkeuren — maar alleen wanneer de VLM de lak wél
-      // goed vond en enkel de meting klaagt: een tintverschuiving is met
-      // per-kanaal curves exact te repareren, ontbrekende metallic-flake of
-      // een andere kleurfamilie niet. De correctie wordt nagemeten; blijft
-      // er afwijking over, dan blijft de poging gewoon afgekeurd.
-      if (paintIssue && verdict.sameVehicle && verdict.paintMatch) {
+      // corrigeren i.p.v. afkeuren: een tintverschuiving is met per-kanaal
+      // curves exact te repareren, ontbrekende metallic-flake of een andere
+      // kleurfamilie niet. De correctie wordt altijd nagemeten. Vond de VLM
+      // de lak óók fout, dan telt zijn oordeel over het óngecorrigeerde
+      // beeld niet meer: de gecorrigeerde kandidaat gaat opnieuw door de
+      // inspectie en moet daar alsnog schoon doorheen (de IONIQ-case:
+      // Transmission Blue dreef alleen in tint, en dat is precies wat de
+      // curves rechtzetten).
+      if (
+        paintIssue && verdict.sameVehicle &&
+        verdict.issues.length === 0 && !prop.distorted
+      ) {
         const gains = paintCorrectionGains(cand, srcMedian);
         const corrected = await sharp(img)
           .linear([gains[0], gains[1], gains[2]], [0, 0, 0])
@@ -273,12 +361,29 @@ async function synthesizeAngle(
         const remeasured = await paintMeansOf(corrPath, cfg, cli.useCache);
         const residual = paintDeviation(remeasured, srcMedian, cfg.SYNTH);
         if (residual === null) {
-          img = corrected;
-          paintIssue = null;
-          console.log(
-            `  lak deterministisch naar de bron-mediaan gecorrigeerd ` +
-              `(gains ${gains.map((g) => g.toFixed(3)).join("/")})`,
-          );
+          const approved = verdict.paintMatch
+            ? true
+            : await (async () => {
+                const reVerdict = await compareAgainstSources(
+                  { data: corrected }, refs, spec, cfg.GEMINI, CACHE_DIR, cli.useCache,
+                );
+                if (
+                  reVerdict.sameVehicle && reVerdict.paintMatch &&
+                  reVerdict.issues.length === 0
+                ) {
+                  verdict = reVerdict;
+                  return true;
+                }
+                return false;
+              })();
+          if (approved) {
+            img = corrected;
+            paintIssue = null;
+            console.log(
+              `  lak deterministisch naar de bron-mediaan gecorrigeerd ` +
+                `(gains ${gains.map((g) => g.toFixed(3)).join("/")})`,
+            );
+          }
         }
       }
     }
