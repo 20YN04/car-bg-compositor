@@ -162,6 +162,16 @@ export async function replaceBackground(
     .toColourspace("b-w")
     .raw()
     .toBuffer();
+  // nabijheidsveld: hoe dicht bij de auto, hoe rauwer (= scherper) de
+  // schaduw. Vlak onder de banden hoort een strakke contactschaduw — de
+  // blur die vloernaden wegwerkt mag die niet meesmeren. Naden liggen
+  // verder van de auto en krijgen daar de geblurde versie; vlak bij de
+  // auto ligt eventuele naad tóch onder de echte schaduw.
+  const proximity = await sharp(alpha, { raw: { width, height, channels: 1 } })
+    .blur(Math.max(2, width * 0.008))
+    .toColourspace("b-w")
+    .raw()
+    .toBuffer();
 
   const out = Buffer.alloc(width * height * 3);
   for (let y = 0; y < height; y++) {
@@ -170,9 +180,19 @@ export async function replaceBackground(
       const p = i * 3;
       const a = (alpha[i] ?? 0) / 255;
       const w = zoneWeight(x, y);
-      let ratio = (ratioBlurred[i] ?? 255) / 255;
-      // restruis niet laten doordrukken
-      if (ratio > 0.96) ratio = 1;
+      const near = Math.min(1, ((proximity[i] ?? 0) / 255) * 2.5);
+      const raw = (ratioU8[i] ?? 255) / 255;
+      const soft = (ratioBlurred[i] ?? 255) / 255;
+      let ratio = raw * near + soft * (1 - near);
+      // zachte knie tegen restruis: een harde afsnede tekende een golvende
+      // contour in de schaduwrand. Boven 0.99 volledig plate, tussen 0.99
+      // en 0.93 geleidelijk meer schaduw laten doorkomen.
+      if (ratio > 0.99) {
+        ratio = 1;
+      } else if (ratio > 0.93) {
+        const t = (0.99 - ratio) / 0.06;
+        ratio = 1 - (1 - ratio) * t;
+      }
       for (let c = 0; c < 3; c++) {
         const pv = plate[p + c] ?? 0;
         const cv = cand[p + c] ?? 0;
