@@ -100,6 +100,54 @@ export function parseVerdict(raw: string): IdentityVerdict {
   return { sameVehicle: yes, paintMatch: yes, issues: yes ? [] : [raw.slice(0, 300)] };
 }
 
+export interface ProportionVerdict {
+  distorted: boolean;
+  why: string;
+}
+
+/**
+ * Gerichte proportie-poort, los van de algemene inspectie.
+ *
+ * In het waslijstje van compareAgainstSources verdrinkt de proportievraag:
+ * de Taycan Cross Turismo kwam er samengedrukt doorheen terwijl badges en
+ * velgen wél werden nagekeken. Eén vraag met één focus dwingt het model om
+ * echt naar wielbasis, lengte en overhangen te kijken.
+ */
+export async function checkProportions(
+  candidate: ImagePart,
+  sources: ImagePart[],
+  spec: string,
+  cfg: GeminiConfig,
+  cacheDir: string,
+  useCache: boolean,
+): Promise<ProportionVerdict> {
+  const prompt =
+    "The FIRST image is a candidate catalogue image. Every other image is " +
+    `a source photo of the real vehicle: ${spec}.\n` +
+    "Focus ONLY on body proportions. Compare the candidate against the " +
+    "sources on: wheelbase relative to body length, body length relative " +
+    "to height, front and rear overhangs, and wheel size relative to the " +
+    "body. Is the candidate's body stretched, compressed, shortened or " +
+    "squashed in any direction compared to the real vehicle?\n" +
+    'Answer with STRICT JSON only, no code fences: {"distorted": boolean, ' +
+    '"why": string} — why stays empty when the proportions match.';
+  const raw = await geminiText([candidate, ...sources], prompt, cfg, cacheDir, useCache);
+  const match = raw.match(/\{[\s\S]*\}/);
+  if (match) {
+    try {
+      const obj = JSON.parse(match[0]) as { distorted?: unknown; why?: unknown };
+      return {
+        distorted: obj.distorted === true,
+        why: typeof obj.why === "string" ? obj.why : "",
+      };
+    } catch {
+      // valt door naar de tekstheuristiek
+    }
+  }
+  const bad = /"?distorted"?\s*[:=]?\s*true|^\s*yes\b/i.test(raw);
+  return { distorted: bad, why: bad ? raw.slice(0, 300) : "" };
+}
+
 const luma = (m: ChannelMeans): number => 0.2126 * m.r + 0.7152 * m.g + 0.0722 * m.b;
 
 /**

@@ -54,6 +54,7 @@ import {
   type ImagePart,
 } from "./gemini.js";
 import {
+  checkProportions,
   compareAgainstSources,
   identifyVehicle,
   paintCorrectionGains,
@@ -1909,9 +1910,13 @@ function synthPrompt(spec: string, feedback: string[], hasAnchor: boolean): stri
     p +=
       "The FIRST image is a COMPOSITION ANCHOR showing a DIFFERENT " +
       "vehicle. Match it EXACTLY on: camera angle and height, vehicle " +
-      "position and scale in the frame, background, lighting, floor " +
-      "shadow and reflection. Take ZERO vehicle design details from the " +
-      "anchor — no body parts, no wheels, no badges.\n" +
+      "position in the frame, background, lighting, floor shadow and " +
+      "reflection. The anchor does NOT dictate the vehicle's size or " +
+      "shape: the vehicle keeps its OWN real length, height and " +
+      "proportions from the source photos — a longer vehicle simply takes " +
+      "more room in the frame. NEVER compress, shorten or squash the body " +
+      "to fit the anchor's footprint. Take ZERO vehicle design details " +
+      "from the anchor — no body parts, no wheels, no badges.\n" +
       "All OTHER images are source photos of the vehicle to reconstruct; ";
   } else {
     p += "The attached photos are source photos of the vehicle to reconstruct; ";
@@ -2048,6 +2053,11 @@ async function synthesizeAngle(
     const verdict = await compareAgainstSources(
       { data: img }, refs, spec, cfg.GEMINI, CACHE_DIR, cli.useCache,
     );
+    // aparte proportie-poort: in de brede inspectie verdronk deze vraag en
+    // kwam een samengedrukte Cross Turismo erdoorheen
+    const prop = await checkProportions(
+      { data: img }, refs, spec, cfg.GEMINI, CACHE_DIR, cli.useCache,
+    );
     // deterministische lakmeting naast de VLM-inspectie: zilver dat wit
     // rendert kwam door de inspectie heen, maar niet door de meting
     let paintIssue: string | null = null;
@@ -2087,8 +2097,12 @@ async function synthesizeAngle(
       ...verdict.issues,
       ...(verdict.paintMatch ? [] : ["inspection judged the paint colour different from the sources"]),
       ...(paintIssue ? [paintIssue] : []),
+      ...(prop.distorted
+        ? [`body proportions are wrong: ${prop.why || "stretched or compressed versus the sources"}`]
+        : []),
     ];
-    const acceptable = verdict.sameVehicle && verdict.paintMatch && paintIssue === null;
+    const acceptable =
+      verdict.sameVehicle && verdict.paintMatch && paintIssue === null && !prop.distorted;
     if (acceptable && (best === null || verdict.issues.length < best.issues.length)) {
       best = { img, issues: verdict.issues };
     }
@@ -2096,7 +2110,11 @@ async function synthesizeAngle(
     console.warn(
       `  ⚠ synth-poging ${attempt + 1} ` +
         (verdict.sameVehicle
-          ? acceptable ? "met afwijkingen" : "afgekeurd (lak)"
+          ? acceptable
+            ? "met afwijkingen"
+            : prop.distorted
+              ? "afgekeurd (proporties)"
+              : "afgekeurd (lak)"
           : "afgekeurd (andere auto)") +
         `: ${allIssues.join("; ") || "(geen detail opgegeven)"}`,
     );
