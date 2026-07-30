@@ -73,11 +73,25 @@ export interface SynthConfig {
   anchorPath: string;
 }
 
+/**
+ * De Carredo-kentekenplaat (wit, blauw wordmark, houder met leasing-strip)
+ * wordt deterministisch op de gegenereerde plaathouder gewarpt — leesbare
+ * tekst en het logo mogen nooit uit het model komen, hertekende tekens
+ * gaan altijd mis. Florence vindt de houder, SAM2 geeft het plaatvlak.
+ */
+export interface PlateConfig {
+  assetPath: string;
+  detectPrompt: string;
+  detectionModelId: string; // bbox uit tekstprompt (Florence-2 grounding)
+  segmentModelId: string; // box-prompt → masker (SAM2)
+}
+
 export interface Config {
   GEMINI: GeminiConfig;
   MATTE: MatteConfig;
   FAL: FalConfig;
   SYNTH: SynthConfig;
+  PLATE: PlateConfig;
 }
 
 export const defaultConfig: Config = {
@@ -105,5 +119,11 @@ export const defaultConfig: Config = {
     maxLumaRatio: 1.15,
     maxTintDelta: 0.05,
     anchorPath: "assets/thumbnail-composition-anchor.jpg",
+  },
+  PLATE: {
+    assetPath: "assets/carredo-plate.png",
+    detectPrompt: "license plate",
+    detectionModelId: "fal-ai/florence-2-large/caption-to-phrase-grounding",
+    segmentModelId: "fal-ai/sam2/image",
   },
 };

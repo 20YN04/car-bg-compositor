@@ -15,6 +15,7 @@ import {
 } from "./identify.js";
 import { getCutout, maskStats, noteFalFailure } from "./mask.js";
 import { cutoutMeans, medianMeans, type ChannelMeans } from "./measure.js";
+import { mountPlate } from "./plate.js";
 
 const IN_DIR = "./in";
 const OUT_DIR = "./out";
@@ -23,6 +24,8 @@ const CACHE_DIR = "./cache";
 interface CliOptions {
   /** Auto-map (onder in/) waarvoor de thumbnail wordt gesynthetiseerd. */
   synth?: string;
+  /** Bestaande thumbnail van deze map alsnog van de Carredo-plaat voorzien. */
+  mountPlate?: string;
   useCache: boolean;
 }
 
@@ -30,6 +33,7 @@ function parseCli(): { cfg: Config; cli: CliOptions } {
   const { values } = parseArgs({
     options: {
       synth: { type: "string" },
+      "mount-plate": { type: "string" },
       matte: { type: "string" },
       "rembg-model": { type: "string" },
       "no-cache": { type: "boolean", default: false },
@@ -47,7 +51,11 @@ function parseCli(): { cfg: Config; cli: CliOptions } {
   }
   return {
     cfg,
-    cli: { synth: values.synth, useCache: !values["no-cache"] },
+    cli: {
+      synth: values.synth,
+      mountPlate: values["mount-plate"],
+      useCache: !values["no-cache"],
+    },
   };
 }
 
@@ -100,8 +108,11 @@ function synthPrompt(spec: string, feedback: string[], hasAnchor: boolean): stri
     "reflections in the paint — no trees, no buildings.\n" +
     "The car fills about three quarters of the frame width, horizontally " +
     "centred, whole car in frame with clear margin on every side. No " +
-    "people, no text, no watermark, no props. Licence plate: plain dark " +
-    "plate without readable characters.";
+    "people, no text, no watermark, no props.\n" +
+    "LICENCE PLATE: an empty blank pale-grey front plate in correct " +
+    "European proportions — a WIDE SHORT rectangle, about 4.5 times wider " +
+    "than tall, mounted flat where this car model carries its front plate. " +
+    "No characters, no frame taller than the plate itself.";
   if (feedback.length > 0) {
     p +=
       "\nA previous attempt was rejected by inspection for these " +
@@ -294,6 +305,24 @@ async function main(): Promise<void> {
     await mkdir(dir, { recursive: true });
   }
 
+  // bestaande thumbnail alsnog van de plaat voorzien — de expliciete route
+  // voor beelden die vóór de plaatmontage zijn goedgekeurd. Deterministisch:
+  // er wordt niets hergenereerd, en de plaatloze versie blijft in
+  // cache/accepted-synth-<map>.jpg staan.
+  if (cli.mountPlate) {
+    const thumb = path.join(OUT_DIR, cli.mountPlate, "thumbnail.jpg");
+    if (!existsSync(thumb)) {
+      throw new Error(`geen thumbnail gevonden: ${thumb}`);
+    }
+    const result = await mountPlate(await readFile(thumb), cfg.PLATE, CACHE_DIR, cli.useCache);
+    if (!result.mounted) {
+      throw new Error(`plaat niet gemonteerd: ${result.reason} — thumbnail onaangeroerd`);
+    }
+    await writeFile(thumb, result.image);
+    console.log(`plaat gemonteerd: ${thumb}`);
+    return;
+  }
+
   if (!cli.synth) {
     const dirs = (await readdir(IN_DIR, { withFileTypes: true }))
       .filter((e) => e.isDirectory())
@@ -322,7 +351,17 @@ async function main(): Promise<void> {
   }
 
   console.log(`→ ${cli.synth}`);
-  const accepted = await synthesizeAngle(cli.synth, cfg, cli);
+  let accepted = await synthesizeAngle(cli.synth, cfg, cli);
+
+  // de Carredo-plaat deterministisch op de gegenereerde houder warpen —
+  // leesbare tekst komt nooit uit het model. Faalt de montage, dan wordt de
+  // plaatloze thumbnail gewoon gepubliceerd, met een luide melding.
+  const mount = await mountPlate(accepted, cfg.PLATE, CACHE_DIR, cli.useCache);
+  if (mount.mounted) {
+    accepted = mount.image;
+  } else {
+    console.warn(`  ⚠ plaat niet gemonteerd: ${mount.reason} — thumbnail zonder plaat`);
+  }
 
   // het goedgekeurde studiobeeld ÍS het eindresultaat (besluit 2026-07-30):
   // geen hercompositing, plaathouder blijft zoals gegenereerd. Publiceren =

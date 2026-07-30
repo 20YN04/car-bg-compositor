@@ -54,9 +54,16 @@ altijd `out/<map>/thumbnail.jpg` — het enige bestand in die map.
      de lak per-kanaal exact naar de bron-mediaan gecorrigeerd en nagemeten
    - *proporties*: gerichte vraag op wielbasis/lengte/overhangen — een
      samengedrukte of uitgerekte koets wordt afgekeurd
-4. **Publicatie** — het goedgekeurde beeld ís het eindresultaat; de lege
-   plaathouder blijft zoals gegenereerd (geen leesbaar kenteken, per
-   constructie GDPR-veilig).
+4. **Plaatmontage** — de Carredo-kentekenplaat (`assets/carredo-plate.png`)
+   wordt deterministisch op de gegenereerde plaathouder gewarpt: Florence
+   vindt de houder, SAM2 geeft het plaatvlak, en het asset dekt de héle
+   gedetecteerde plaat (het model tekent er soms een EU-band bij — die
+   verdwijnt eronder). Leesbare tekst komt nooit uit het model. Faalt de
+   montage, dan wordt de thumbnail zonder plaat gepubliceerd met een
+   melding. `--mount-plate <map>` monteert de plaat alsnog op een
+   bestaande thumbnail.
+5. **Publicatie** — het goedgekeurde beeld ís het eindresultaat (geen
+   leesbaar echt kenteken, per constructie GDPR-veilig).
 
 ## Bescherming van goedgekeurde beelden
 
