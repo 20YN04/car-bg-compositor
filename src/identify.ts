@@ -9,19 +9,42 @@ import type { ChannelMeans } from "./measure.js";
  * het model niet per call opnieuw hoeft te raden welke auto het ziet — de
  * fout die eerder een Taycan in een generiek "sports sedan" veranderde.
  */
+export interface VehicleIdentity {
+  spec: string;
+  /** Werkelijke voertuiglengte in meters — stuurt de kadervulling. */
+  lengthM: number;
+}
+
 export async function identifyVehicle(
   refs: ImagePart[],
   cfg: GeminiConfig,
   cacheDir: string,
   useCache: boolean,
-): Promise<string> {
+): Promise<VehicleIdentity> {
   const prompt =
     "These photos all show the same vehicle. Identify it exactly: make, " +
     "model, generation/body code, trim level if visible, paint colour, " +
     "wheel design and size, and any visible options (roof rails, spoiler, " +
-    "badges, trim accents, panoramic roof). Answer in one dense line, no " +
-    "preamble.";
-  return (await geminiText(refs, prompt, cfg, cacheDir, useCache)).trim();
+    "badges, trim accents, panoramic roof). Also give the real-world " +
+    "exterior length of this exact model in metres.\n" +
+    'Answer with STRICT JSON only, no code fences: {"spec": "<one dense ' +
+    'line>", "length_m": <number>}.';
+  const raw = await geminiText(refs, prompt, cfg, cacheDir, useCache);
+  const match = raw.match(/\{[\s\S]*\}/);
+  if (match) {
+    try {
+      const obj = JSON.parse(match[0]) as { spec?: unknown; length_m?: unknown };
+      const lengthM = typeof obj.length_m === "number" ? obj.length_m : NaN;
+      return {
+        spec: typeof obj.spec === "string" ? obj.spec : raw.trim().slice(0, 400),
+        // plausibiliteitsklem: personenauto's liggen tussen ~2.5 en 6 m
+        lengthM: Number.isFinite(lengthM) ? Math.min(6, Math.max(2.5, lengthM)) : 4.6,
+      };
+    } catch {
+      // valt door naar de fallback
+    }
+  }
+  return { spec: raw.trim().slice(0, 400), lengthM: 4.6 };
 }
 
 export interface IdentityVerdict {
@@ -205,6 +228,58 @@ export async function checkPlate(
   }
   const ok = /"?plate_ok"?\s*[:=]?\s*true|^\s*yes\b/i.test(raw);
   return { plateOk: ok, issues: ok ? [] : [raw.slice(0, 300)] };
+}
+
+export interface QualityVerdict {
+  qualityOk: boolean;
+  issues: string[];
+}
+
+/**
+ * Kwaliteitspoort met het anker als standaard: slechte bronfoto's (lage
+ * resolutie, ruis, compressie) mogen nooit een zachte of plastic-achtige
+ * output opleveren. Een deterministische scherptemaat bleek hier lak-textuur
+ * te meten in plaats van kwaliteit (zwarte lak scoort altijd "onscherp"),
+ * dus dit is bewust een visueel oordeel tegen een vaste referentie.
+ */
+export async function checkQuality(
+  candidate: ImagePart,
+  anchor: ImagePart,
+  cfg: GeminiConfig,
+  cacheDir: string,
+  useCache: boolean,
+): Promise<QualityVerdict> {
+  const prompt =
+    "The FIRST image is a candidate catalogue photo. The SECOND image is " +
+    "the QUALITY REFERENCE: the required standard of professional studio " +
+    "photography.\n" +
+    "Judge ONLY the image quality and rendering of the candidate — not the " +
+    "vehicle, not the composition. It must match the reference standard: " +
+    "tack-sharp panel lines and badges, clean realistic reflections, " +
+    "believable materials, no blur, no noise, no compression artifacts, no " +
+    "soft plasticky toy-like or over-smoothed rendering, no watermark " +
+    "remnants. Low-quality source photos are never an excuse — the output " +
+    "must look like it was shot in the reference's studio with the " +
+    "reference's camera.\n" +
+    'Answer with STRICT JSON only, no code fences: {"quality_ok": boolean, ' +
+    '"issues": string[]} — issues stays empty when the quality matches.';
+  const raw = await geminiText([candidate, anchor], prompt, cfg, cacheDir, useCache);
+  const match = raw.match(/\{[\s\S]*\}/);
+  if (match) {
+    try {
+      const obj = JSON.parse(match[0]) as { quality_ok?: unknown; issues?: unknown };
+      return {
+        qualityOk: obj.quality_ok === true,
+        issues: Array.isArray(obj.issues)
+          ? obj.issues.filter((i): i is string => typeof i === "string")
+          : [],
+      };
+    } catch {
+      // valt door naar de tekstheuristiek
+    }
+  }
+  const ok = /"?quality_ok"?\s*[:=]?\s*true|^\s*yes\b/i.test(raw);
+  return { qualityOk: ok, issues: ok ? [] : [raw.slice(0, 300)] };
 }
 
 const luma = (m: ChannelMeans): number => 0.2126 * m.r + 0.7152 * m.g + 0.0722 * m.b;

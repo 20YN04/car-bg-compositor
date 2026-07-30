@@ -78,6 +78,12 @@ export interface SynthConfig {
    * definitie niet meer per generatie verschillen.
    */
   backgroundPlatePath: string;
+  /**
+   * Vaste grondlijn (fractie van de beeldhoogte) waarop elke auto met zijn
+   * bbox-onderkant landt na de schaalnormalisatie. Gemeten op het anker
+   * (2026-07-30): de EQE staat met zijn onderkant op 0.813.
+   */
+  groundLineRatio: number;
 }
 
 /**
@@ -129,6 +135,7 @@ export const defaultConfig: Config = {
     maxTintDelta: 0.05,
     anchorPath: "assets/thumbnail-composition-anchor.jpg",
     backgroundPlatePath: "assets/studio-empty.jpg",
+    groundLineRatio: 0.813,
   },
   PLATE: {
     assetPath: "assets/carredo-plate.png",

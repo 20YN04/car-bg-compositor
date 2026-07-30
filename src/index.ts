@@ -9,6 +9,7 @@ import { geminiStats, generateNovelView, type ImagePart } from "./gemini.js";
 import {
   checkPlate,
   checkProportions,
+  checkQuality,
   compareAgainstSources,
   identifyVehicle,
   paintCorrectionGains,
@@ -16,7 +17,7 @@ import {
 } from "./identify.js";
 import { getCutout, maskStats, noteFalFailure } from "./mask.js";
 import { cutoutMeans, medianMeans, type ChannelMeans } from "./measure.js";
-import { replaceBackground } from "./background.js";
+import { normalizeScale, replaceBackground } from "./background.js";
 import { mountPlate } from "./plate.js";
 
 const IN_DIR = "./in";
@@ -181,11 +182,23 @@ async function paintMeansOf(
   return cutoutMeans(data, alpha, info.width, info.height);
 }
 
+/**
+ * Doelvulling van het kader op basis van de echte wagenlengte: het anker
+ * (EQE, 4.95 m) staat op 75% breedte, en elke auto schaalt daar reëel
+ * tegenover — een 500e (3.6 m) hoort dus rond 55%, anders leest een kleine
+ * stadsauto als een reuzenwagen.
+ */
+function targetFrameFill(lengthM: number): number {
+  // het anker (EQE, 4.95 m) vult gemeten 88.4% van het kader
+  return Math.min(0.88, Math.max(0.45, 0.884 * (lengthM / 4.95)));
+}
+
 function synthPrompt(
   spec: string,
   feedback: string[],
   hasAnchor: boolean,
   hasPlate: boolean,
+  fillPct: number,
 ): string {
   let p = `Create a professional catalogue photo of this exact vehicle: ${spec}.\n`;
   if (hasAnchor) {
@@ -221,9 +234,16 @@ function synthPrompt(
     "background, floor, lighting mood or any watermark from the source " +
     "photos — the studio comes ONLY from the anchor. Render no watermark, " +
     "no logo overlay and no floating text anywhere in the image.\n" +
-    "The car fills about three quarters of the frame width, horizontally " +
-    "centred, whole car in frame with clear margin on every side. No " +
-    "people, no watermark, no props.\n" +
+    `The car fills about ${Math.round(fillPct * 100)}% of the frame width — ` +
+    "this follows from its REAL size: a small city car occupies clearly " +
+    "less of the frame than a large sedan in the same studio; never blow a " +
+    "small car up to fill the frame. Horizontally centred, whole car in " +
+    "frame with clear margin on every side. No people, no watermark, no " +
+    "props.\n" +
+    "QUALITY: tack-sharp professional studio photography, regardless of " +
+    "the source photo quality — reconstruct crisp panel lines, badges and " +
+    "reflections cleanly; never reproduce blur, noise, compression " +
+    "artifacts or watermarks from the source photos.\n" +
     (hasPlate
       ? "LICENCE PLATE: the LAST attached image is the exact Carredo " +
         "dealer plate (white plate, blue Carredo wordmark, holder with a " +
@@ -260,7 +280,7 @@ async function synthesizeAngle(
   dir: string,
   cfg: Config,
   cli: CliOptions,
-): Promise<Buffer> {
+): Promise<{ img: Buffer; fillPct: number }> {
   const entries = await readdir(path.join(IN_DIR, dir), { withFileTypes: true });
   const refFiles = entries
     .filter((e) => e.isFile() && /\.(jpe?g|png)$/i.test(e.name))
@@ -276,8 +296,12 @@ async function synthesizeAngle(
       mime: f.toLowerCase().endsWith(".png") ? "image/png" : "image/jpeg",
     });
   }
-  const spec = await identifyVehicle(refs, cfg.GEMINI, CACHE_DIR, cli.useCache);
-  console.log(`  voertuig: ${spec}`);
+  const identity = await identifyVehicle(refs, cfg.GEMINI, CACHE_DIR, cli.useCache);
+  const spec = identity.spec;
+  const fillPct = targetFrameFill(identity.lengthM);
+  console.log(
+    `  voertuig: ${spec}\n  lengte ~${identity.lengthM.toFixed(2)} m → kadervulling ~${Math.round(fillPct * 100)}%`,
+  );
 
   // compositie-anker vooraan in de invoer, plaat-asset achteraan; de
   // bronfoto's zitten ertussen. De identiteitsinspecties vergelijken
@@ -329,7 +353,7 @@ async function synthesizeAngle(
   let feedback: string[] = [];
   for (let attempt = 0; attempt < cfg.SYNTH.maxAttempts; attempt++) {
     let img = await generateNovelView(
-      genRefs, synthPrompt(spec, feedback, hasAnchor, plateAsset !== null),
+      genRefs, synthPrompt(spec, feedback, hasAnchor, plateAsset !== null, fillPct),
       cfg.GEMINI, CACHE_DIR, cli.useCache, cfg.SYNTH.seed + attempt,
     );
     // harde dimensiepoort vóór de (betaalde) inspectie: het model rendert
@@ -383,12 +407,21 @@ async function synthesizeAngle(
     const plate = plateAsset
       ? await checkPlate({ data: img }, plateAsset, cfg.GEMINI, CACHE_DIR, cli.useCache)
       : { plateOk: true, issues: [] };
+    // kwaliteitspoort: het anker is de standaard — slechte bronfoto's zijn
+    // nooit een excuus voor een zachte of plastic-achtige render
+    const qual = hasAnchor
+      ? await checkQuality({ data: img }, genRefs[0]!, cfg.GEMINI, CACHE_DIR, cli.useCache)
+      : { qualityOk: true, issues: [] };
+    // schaal wordt niet afgekeurd maar gecorrigeerd: het model tekent elke
+    // auto het kader vol, en de deterministische normalizeScale bij
+    // publicatie zet hem op zijn reële vulling. De prompt-hint blijft.
+    const candPath = path.join(CACHE_DIR, `synth-candidate-${cfg.SYNTH.seed + attempt}.jpg`);
+    await writeFile(candPath, img);
+    const candCutout = await getCutout(candPath, CACHE_DIR, cfg.FAL, cfg.MATTE, cli.useCache);
     // deterministische lakmeting naast de VLM-inspectie: zilver dat wit
     // rendert kwam door de inspectie heen, maar niet door de meting
     let paintIssue: string | null = null;
     if (srcMedian) {
-      const candPath = path.join(CACHE_DIR, `synth-candidate-${cfg.SYNTH.seed + attempt}.jpg`);
-      await writeFile(candPath, img);
       const cand = await paintMeansOf(candPath, cfg, cli.useCache);
       paintIssue = paintDeviation(cand, srcMedian, cfg.SYNTH);
       // corrigeren i.p.v. afkeuren: een tintverschuiving is met per-kanaal
@@ -404,7 +437,6 @@ async function synthesizeAngle(
         verdict.issues.length === 0 && !prop.distorted
       ) {
         const gains = paintCorrectionGains(cand, srcMedian);
-        const candCutout = await getCutout(candPath, CACHE_DIR, cfg.FAL, cfg.MATTE, cli.useCache);
         const corrected = await applyMaskedGains(img, candCutout, gains);
         const corrPath = path.join(
           CACHE_DIR, `synth-corrected-${cfg.SYNTH.seed + attempt}.jpg`,
@@ -447,10 +479,11 @@ async function synthesizeAngle(
         ? [`body proportions are wrong: ${prop.why || "stretched or compressed versus the sources"}`]
         : []),
       ...plate.issues.map((i) => `licence plate: ${i}`),
+      ...qual.issues.map((i) => `image quality: ${i}`),
     ];
     const acceptable =
       verdict.sameVehicle && verdict.paintMatch && paintIssue === null &&
-      !prop.distorted && plate.plateOk;
+      !prop.distorted && plate.plateOk && qual.qualityOk;
     if (acceptable && (best === null || verdict.issues.length < best.issues.length)) {
       best = { img, issues: verdict.issues };
     }
@@ -464,7 +497,9 @@ async function synthesizeAngle(
               ? "afgekeurd (proporties)"
               : !plate.plateOk
                 ? "afgekeurd (plaat)"
-                : "afgekeurd (lak)"
+                : !qual.qualityOk
+                  ? "afgekeurd (kwaliteit)"
+                  : "afgekeurd (lak)"
           : "afgekeurd (andere auto)") +
         `: ${allIssues.join("; ") || "(geen detail opgegeven)"}`,
     );
@@ -488,7 +523,7 @@ async function synthesizeAngle(
     path.join(CACHE_DIR, `accepted-synth-${dir.replace(/[/\\]/g, "_")}.jpg`),
     best.img,
   );
-  return best.img;
+  return { img: best.img, fillPct };
 }
 
 async function main(): Promise<void> {
@@ -546,22 +581,34 @@ async function main(): Promise<void> {
   // de plaat zit sinds 2026-07-30 ín de generatie (asset als referentie +
   // eigen poort); de deterministische naderhand-montage bestaat alleen nog
   // als handmatige --mount-plate voor beelden zonder plaat
-  let accepted = await synthesizeAngle(cli.synth, cfg, cli);
+  const synth = await synthesizeAngle(cli.synth, cfg, cli);
+  let accepted = synth.img;
 
-  // de achtergrond komt nooit uit het model: na acceptatie wordt hij
-  // vervangen door de statische plate (auto + schaduw blijven uit de
-  // kandidaat). Faalt de vervanging, dan publiceren we niet half — de
-  // kandidaat gaat er ongewijzigd door, met melding.
+  // geometrie in code: eerst de auto deterministisch op zijn reële
+  // kadervulling en de vaste grondlijn zetten (alleen downscalen), daarna
+  // de achtergrond vervangen door de statische plate. Faalt een stap, dan
+  // publiceren we niet half — de kandidaat gaat er ongewijzigd door, met
+  // melding.
   if (existsSync(cfg.SYNTH.backgroundPlatePath)) {
     try {
       const accPath = path.join(CACHE_DIR, "accepted-tmp.jpg");
       await writeFile(accPath, accepted);
       const cutout = await getCutout(accPath, CACHE_DIR, cfg.FAL, cfg.MATTE, cli.useCache);
-      accepted = await replaceBackground(accepted, cutout, cfg.SYNTH.backgroundPlatePath);
+      const scaled = await normalizeScale(
+        accepted, cutout, synth.fillPct, cfg.SYNTH.groundLineRatio,
+      );
+      if (scaled.measuredFill - synth.fillPct > 0.02) {
+        console.log(
+          `  schaal genormaliseerd: ${Math.round(scaled.measuredFill * 100)}% → ${Math.round(synth.fillPct * 100)}% kadervulling`,
+        );
+      }
+      accepted = await replaceBackground(
+        scaled.img, scaled.cutout, cfg.SYNTH.backgroundPlatePath,
+      );
       await rm(accPath, { force: true });
     } catch (err) {
       console.warn(
-        `  ⚠ achtergrondvervanging mislukt (${err instanceof Error ? err.message : err}) — kandidaat ongewijzigd gepubliceerd`,
+        `  ⚠ schaal/achtergrond-normalisatie mislukt (${err instanceof Error ? err.message : err}) — kandidaat ongewijzigd gepubliceerd`,
       );
     }
   } else {

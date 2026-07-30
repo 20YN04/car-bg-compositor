@@ -1,6 +1,69 @@
 import sharp from "sharp";
 
 /**
+ * Schaalt de auto deterministisch naar zijn reële kadervulling.
+ *
+ * Het model tekent elke auto het kader vol (het anker-composiet domineert;
+ * gemeten op de 500e: 80–86% waar 65% hoort), en promptfeedback kreeg dat
+ * niet klein. Geometrie hoort in code: we schalen het hele kandidaatbeeld
+ * omlaag (alleen downscalen — verliesvrij) en zetten de wagen met zijn
+ * bbox-onderkant op de vaste grondlijn van het anker, horizontaal
+ * gecentreerd. De achtergrond eromheen is een tijdelijke vulling: de
+ * plate-vervanging hierna maakt daar per definitie de studio van.
+ */
+export async function normalizeScale(
+  img: Buffer,
+  cutout: Buffer,
+  targetFill: number,
+  groundLineRatio: number,
+): Promise<{ img: Buffer; cutout: Buffer; measuredFill: number }> {
+  const meta = await sharp(img).metadata();
+  const W = meta.width ?? 1;
+  const H = meta.height ?? 1;
+  const { data, info } = await sharp(cutout)
+    .resize(W, H, { fit: "fill" })
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  let left = info.width, right = -1, bottom = -1;
+  for (let y = 0; y < info.height; y++) {
+    for (let x = 0; x < info.width; x++) {
+      if ((data[(y * info.width + x) * 4 + 3] ?? 0) > 10) {
+        if (x < left) left = x;
+        if (x > right) right = x;
+        if (y > bottom) bottom = y;
+      }
+    }
+  }
+  if (right < 0) throw new Error("schaalnormalisatie: leeg masker");
+  const measuredFill = (right - left + 1) / W;
+  const s = targetFill / measuredFill;
+  // alleen omlaag schalen; opblazen zou detail verzinnen
+  if (s >= 0.98) return { img, cutout, measuredFill };
+
+  const W2 = Math.max(1, Math.round(W * s));
+  const H2 = Math.max(1, Math.round(H * s));
+  const scaledImg = await sharp(img).resize(W2, H2).png().toBuffer();
+  const scaledCut = await sharp(cutout).resize(W2, H2).png().toBuffer();
+  const dx = Math.round(W / 2 - ((left + right) / 2) * s);
+  const dy = Math.round(H * groundLineRatio - bottom * s);
+  const imgCanvas = await sharp({
+    // neutrale vulling; wordt integraal door de plate vervangen
+    create: { width: W, height: H, channels: 3, background: { r: 228, g: 230, b: 236 } },
+  })
+    .composite([{ input: scaledImg, left: dx, top: dy }])
+    .jpeg({ quality: 97 })
+    .toBuffer();
+  const cutCanvas = await sharp({
+    create: { width: W, height: H, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } },
+  })
+    .composite([{ input: scaledCut, left: dx, top: dy }])
+    .png()
+    .toBuffer();
+  return { img: imgCanvas, cutout: cutCanvas, measuredFill };
+}
+
+/**
  * Vervangt de achtergrond van een geaccepteerde kandidaat door de statische
  * studio-plate — deterministisch, per pixel.
  *
