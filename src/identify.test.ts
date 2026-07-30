@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { paintDeviation, parseVerdict } from "./identify.js";
+import { paintCorrectionGains, paintDeviation, parseVerdict } from "./identify.js";
 
 describe("parseVerdict", () => {
   it("leest strikte JSON", () => {
@@ -42,6 +42,21 @@ describe("parseVerdict", () => {
   it("kapotte JSON valt terug op de tekstheuristiek", () => {
     const v = parseVerdict('{"same_vehicle": true, "issues": [broken');
     expect(v.sameVehicle).toBe(true);
+  });
+});
+
+describe("paintCorrectionGains", () => {
+  it("legt de gemeten witte synthese exact op de bron-mediaan", () => {
+    const g = paintCorrectionGains({ r: 142, g: 144, b: 149 }, { r: 117, g: 120, b: 132 });
+    expect(g[0]).toBeCloseTo(117 / 142, 3);
+    expect(g[1]).toBeCloseTo(120 / 144, 3);
+    expect(g[2]).toBeCloseTo(132 / 149, 3);
+  });
+
+  it("de cap blokkeert een fundamenteel verkeerde kleur", () => {
+    const g = paintCorrectionGains({ r: 200, g: 60, b: 60 }, { r: 117, g: 120, b: 132 });
+    expect(g[0]).toBeCloseTo(1 / 1.3, 5);
+    expect(g[1]).toBeCloseTo(1.3, 5);
   });
 });
 

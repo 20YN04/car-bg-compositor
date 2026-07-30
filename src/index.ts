@@ -53,7 +53,12 @@ import {
   positioningGrid,
   type ImagePart,
 } from "./gemini.js";
-import { compareAgainstSources, identifyVehicle, paintDeviation } from "./identify.js";
+import {
+  compareAgainstSources,
+  identifyVehicle,
+  paintCorrectionGains,
+  paintDeviation,
+} from "./identify.js";
 import { generateSceneQwen, qwenStats } from "./qwen.js";
 import {
   applyGreenhouse,
@@ -1996,7 +2001,7 @@ async function synthesizeAngle(
   let best: { img: Buffer; issues: string[] } | null = null;
   let feedback: string[] = [];
   for (let attempt = 0; attempt < cfg.GENBG.maxAttempts; attempt++) {
-    const img = await generateNovelView(
+    let img = await generateNovelView(
       refs, synthPrompt(spec, feedback), cfg.GEMINI, CACHE_DIR, cli.useCache,
       cfg.GENBG.seed + attempt,
     );
@@ -2011,6 +2016,32 @@ async function synthesizeAngle(
       await writeFile(candPath, img);
       const cand = await paintMeansOf(candPath, cfg, cli.useCache);
       paintIssue = paintDeviation(cand, srcMedian, cfg.SYNTH);
+      // corrigeren i.p.v. afkeuren — maar alleen wanneer de VLM de lak wél
+      // goed vond en enkel de meting klaagt: een tintverschuiving is met
+      // per-kanaal curves exact te repareren, ontbrekende metallic-flake of
+      // een andere kleurfamilie niet. De correctie wordt nagemeten; blijft
+      // er afwijking over, dan blijft de poging gewoon afgekeurd.
+      if (paintIssue && verdict.sameVehicle && verdict.paintMatch) {
+        const gains = paintCorrectionGains(cand, srcMedian);
+        const corrected = await sharp(img)
+          .linear([gains[0], gains[1], gains[2]], [0, 0, 0])
+          .jpeg({ quality: 97 })
+          .toBuffer();
+        const corrPath = path.join(
+          CACHE_DIR, `synth-corrected-${cfg.GENBG.seed + attempt}.jpg`,
+        );
+        await writeFile(corrPath, corrected);
+        const remeasured = await paintMeansOf(corrPath, cfg, cli.useCache);
+        const residual = paintDeviation(remeasured, srcMedian, cfg.SYNTH);
+        if (residual === null) {
+          img = corrected;
+          paintIssue = null;
+          console.log(
+            `  lak deterministisch naar de bron-mediaan gecorrigeerd ` +
+              `(gains ${gains.map((g) => g.toFixed(3)).join("/")})`,
+          );
+        }
+      }
     }
     const allIssues = [
       ...verdict.issues,

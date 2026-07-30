@@ -108,6 +108,29 @@ const luma = (m: ChannelMeans): number => 0.2126 * m.r + 0.7152 * m.g + 0.0722 *
  * in die b/g). Engelstalige melding, want het resultaat gaat als
  * correctie-instructie terug de generatieprompt in.
  */
+/**
+ * Per-kanaal gains die de kandidaat-lak op de bron-mediaan leggen.
+ *
+ * Corrigeren in plaats van afkeuren: de meting weet exact hóe de lak
+ * afwijkt, en een lineaire gain per kanaal is dezelfde klasse ingreep als
+ * harmonize — pure curves, geen generatieve stap. De cap voorkomt dat een
+ * fundamenteel verkeerde kleur (rood i.p.v. zilver) stilletjes "gecorrigeerd"
+ * wordt: zo'n kandidaat hoort door de meting afgekeurd te blijven.
+ */
+export function paintCorrectionGains(
+  candidate: ChannelMeans,
+  reference: ChannelMeans,
+  cap = 1.3,
+): [number, number, number] {
+  const g = (c: number, r: number) =>
+    Math.min(cap, Math.max(1 / cap, r / Math.max(1e-6, c)));
+  return [
+    g(candidate.r, reference.r),
+    g(candidate.g, reference.g),
+    g(candidate.b, reference.b),
+  ];
+}
+
 export function paintDeviation(
   candidate: ChannelMeans,
   reference: ChannelMeans,
