@@ -927,7 +927,12 @@ export const defaultConfig: Config = {
   GROUND_TRIM_MAX_RATIO: 0.03,
   WHEEL_DIAMETER_M: 0.7,
   FRAMING_GAIN: 1.0,
-  ERODE_MASK: true,
+  // A/B op de EQE (2026-07-30, fal-rmbg): erosie + edge-remap gaven een
+  // getrapte daklijn en aten de bandonderkant aan; zonder beide is de rand
+  // zichtbaar gladder en blijft er meer band over. Beide stappen bestaan
+  // voor de brede zachte overgang van lokale rembg — zet ze weer aan als
+  // MATTE.provider "rembg" is en er halo's verschijnen.
+  ERODE_MASK: false,
   MASK_CLEAN: {
     enabled: true,
     openRadiusRatio: 0.003, // ~6px bij 2048: windmolen weg, antenne blijft heel
@@ -1002,7 +1007,8 @@ export const defaultConfig: Config = {
     provider: "fal-rmbg",
     rmbgModelId: "fal-ai/bria/background/remove",
     rembgModel: "isnet-general-use",
-    edgeSharpen: true,
+    // uit sinds de EQE-A/B (2026-07-30): zie de toelichting bij ERODE_MASK
+    edgeSharpen: false,
     edgeLow: 64,
     edgeHigh: 192,
   },

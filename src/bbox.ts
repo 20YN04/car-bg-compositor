@@ -578,23 +578,53 @@ export function computeWheelGroundLine(
   return { groundLine, clusters, fallback: false };
 }
 
+export interface ColumnRange {
+  x0: number;
+  x1: number;
+}
+
 /**
- * Zet alle maskerpixels onder de wiellijn (+ kleine marge) op 0, zodat een
+ * Zet maskerpixels onder de wiellijn (+ kleine marge) op 0, zodat een
  * aangesmolten slagschaduw niet als grijze appendage onder de auto in het
- * eindbeeld belandt. Retourneert het aantal verwijderde pixels.
+ * eindbeeld belandt. Retourneert het aantal geraakte pixels.
+ *
+ * `protect` zijn kolomranges (wielboxen of contactclusters) die de trim
+ * overslaat: de grondlijn is een percentiel en ligt daardoor een paar pixels
+ * bóven de diepste bandpixels — een vlakke snede door die kolommen gaf
+ * platgeslagen banden (gemeten 8–13px op de EQE-set). De schaduw die
+ * daardoor recht ónder de band blijft staan valt straks in onze eigen
+ * contactschaduw en is onzichtbaar; de brede uitwaaier ernaast wordt wél
+ * gesneden.
+ *
+ * `featherPx` verzacht de sneelijn met een korte alfaramp in plaats van een
+ * harde horizontale rand.
  */
 export function trimAlphaBelow(
   alpha: Uint8Array,
   width: number,
   height: number,
   cutY: number,
+  protect: ColumnRange[] = [],
+  featherPx = 2,
 ): number {
+  const guarded = new Uint8Array(width);
+  for (const r of protect) {
+    const x0 = Math.max(0, Math.floor(Math.min(r.x0, r.x1)));
+    const x1 = Math.min(width - 1, Math.ceil(Math.max(r.x0, r.x1)));
+    for (let x = x0; x <= x1; x++) guarded[x] = 1;
+  }
   let removed = 0;
   for (let y = Math.max(0, cutY + 1); y < height; y++) {
     const row = y * width;
+    const depth = y - cutY; // 1..featherPx = ramp, daarna 0
+    const keep = depth <= featherPx ? (featherPx + 1 - depth) / (featherPx + 1) : 0;
     for (let x = 0; x < width; x++) {
-      if ((alpha[row + x] ?? 0) > 0) {
-        alpha[row + x] = 0;
+      if (guarded[x]) continue;
+      const a = alpha[row + x] ?? 0;
+      if (a === 0) continue;
+      const next = Math.round(a * keep);
+      if (next !== a) {
+        alpha[row + x] = next;
         removed++;
       }
     }

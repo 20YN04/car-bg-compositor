@@ -774,7 +774,15 @@ async function processImage(
     );
     const cutY = cut.cutY;
     groundTrimCapped = cut.capped;
-    groundTrimmedPx = trimAlphaBelow(alpha, width, height, cutY);
+    // wielkolommen beschermen: Florence-boxen onderschatten de bandonderkant
+    // net vaak genoeg dat de wielgarde in groundCutY niet ingreep en de
+    // vlakke snede de band platsloeg; de kolomranges zelf zijn wél
+    // betrouwbaar, en anders geven de contactclusters uit het masker ze
+    const protect =
+      measuredWheels.length > 0
+        ? measuredWheels.map((w) => ({ x0: w.x, x1: w.x + w.w }))
+        : analysis.contactClusters.map((c) => ({ x0: c.x0, x1: c.x1 }));
+    groundTrimmedPx = trimAlphaBelow(alpha, width, height, cutY, protect);
     if (groundTrimmedPx > 0) {
       for (let i = 0; i < alpha.length; i++) data[i * 4 + 3] = alpha[i] ?? 0;
     }

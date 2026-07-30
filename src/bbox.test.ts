@@ -297,10 +297,25 @@ describe("wielcontact-grondlijn (regressie: slagschaduw onder wiel)", () => {
     expect(result.groundTrim).toBeGreaterThan(20);
     expect(result.groundFallback).toBe(false);
     expect(result.contactClusters.length).toBeGreaterThanOrEqual(1);
-    // en trimmen onder de wiellijn verwijdert precies de schaduwblob
+    // en trimmen onder de wiellijn verwijdert precies de schaduwblob;
+    // de 2px-feather op de sneelijn laat de bbox maximaal 2px lager uitkomen
     const removed = trimAlphaBelow(alpha, 400, 300, result.groundLine! + 2);
     expect(removed).toBeGreaterThan(100);
-    expect(computeBBox(alpha, 400, 300, 10).bbox!.bottom).toBeLessThanOrEqual(242);
+    expect(computeBBox(alpha, 400, 300, 10).bbox!.bottom).toBeLessThanOrEqual(244);
+  });
+
+  it("beschermde wielkolommen behouden hun bandonderkant bij de trim", () => {
+    const alpha = makeAlpha(400, 300);
+    fillRect(alpha, 400, 100, 50, 299, 240); // romp, onderkant op 240
+    fillRect(alpha, 400, 130, 241, 170, 252); // bandonderkant onder de grondlijn
+    fillRect(alpha, 400, 200, 241, 280, 250); // uitwaaierende schaduwapron
+
+    trimAlphaBelow(alpha, 400, 300, 242, [{ x0: 130, x1: 170 }]);
+
+    // de band in de beschermde kolommen staat er nog volledig
+    expect(alpha[252 * 400 + 150]).toBe(255);
+    // de apron is weg (op de 2px-feather na): rij 250 in de apron is leeg
+    expect(alpha[250 * 400 + 240]).toBe(0);
   });
 
   it("de geklemde trim laat een voorspoiler onder de wiellijn staan", () => {
@@ -320,9 +335,10 @@ describe("wielcontact-grondlijn (regressie: slagschaduw onder wiel)", () => {
     const slack = 4;
 
     // ongeklemd: alles onder de wiellijn weg, inclusief de hele spoiler
+    // (op de 2px-feather van de sneelijn na)
     const naive = new Uint8Array(alpha);
     trimAlphaBelow(naive, 400, 300, groundLine + slack);
-    expect(computeBBox(naive, 400, 300, 10).bbox!.bottom).toBeLessThanOrEqual(244);
+    expect(computeBBox(naive, 400, 300, 10).bbox!.bottom).toBeLessThanOrEqual(246);
 
     // geklemd op 3% van de bboxhoogte: de spoiler blijft grotendeels staan
     const maxTrim = Math.round(bboxHeight * 0.03);
@@ -330,7 +346,8 @@ describe("wielcontact-grondlijn (regressie: slagschaduw onder wiel)", () => {
     trimAlphaBelow(alpha, 400, 300, cutY);
     const after = computeBBox(alpha, 400, 300, 10).bbox!;
     expect(after.bottom).toBeGreaterThan(groundLine + 10);
-    expect(after.bottom).toBe(bbox.bottom - maxTrim);
+    // de 2px-feather onder de sneelijn houdt daar partiële alfa over
+    expect(after.bottom).toBe(bbox.bottom - maxTrim + 2);
   });
 
   it("legt de grondlijn op de bandlijn, niet op een schaduwkom onder de band", () => {
