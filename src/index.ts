@@ -31,6 +31,15 @@ interface CliOptions {
   /** Bestaande thumbnail van deze map alsnog van de Carredo-plaat voorzien. */
   mountPlate?: string;
   /**
+   * Laat het model een blanco plaathouder tekenen en plak de Carredo-plaat
+   * er daarna deterministisch op. Tekst en logo's zijn de zwakste
+   * vaardigheid van een beeldmodel: het verprutste de plaat geregeld
+   * (verkeerde kleuren, ontbrekend vleugellogo, te klein) en dat kostte
+   * telkens een volledige poging. Een blanco rechthoek tekenen lukt wel, en
+   * de echte plaat komt uit het asset — altijd correct.
+   */
+  plateAfter: boolean;
+  /**
    * Wielbasis gedeeld door wieldiameter, uit de fabrieksspecs. Vult het
    * cijfer in dat de pipeline normaal uit een zuiver zijaanzicht meet. Zonder
    * zo'n foto ligt de wielbasis-poort stil en blijft alleen een VLM-oordeel
@@ -55,6 +64,7 @@ function parseCli(): { cfg: Config; cli: CliOptions } {
       synth: { type: "string" },
       vehicle: { type: "string" },
       "wheelbase-ratio": { type: "string" },
+      "plate-after": { type: "boolean", default: false },
       "mount-plate": { type: "string" },
       matte: { type: "string" },
       "rembg-model": { type: "string" },
@@ -81,6 +91,7 @@ function parseCli(): { cfg: Config; cli: CliOptions } {
       wheelbaseRatio: values["wheelbase-ratio"] !== undefined
         ? Number(values["wheelbase-ratio"])
         : undefined,
+      plateAfter: values["plate-after"] === true,
       mountPlate: values["mount-plate"],
       useCache: !values["no-cache"],
     },
@@ -528,7 +539,11 @@ async function synthesizeAngle(
     );
   }
   let plateAsset: ImagePart | null = null;
-  if (existsSync(cfg.PLATE.assetPath)) {
+  if (cli.plateAfter) {
+    console.log(
+      "  plaat: blanco laten tekenen en na afloop deterministisch monteren",
+    );
+  } else if (existsSync(cfg.PLATE.assetPath)) {
     plateAsset = { data: await readFile(cfg.PLATE.assetPath), mime: "image/png" };
     genRefs = [...genRefs, plateAsset];
   } else {
@@ -942,6 +957,25 @@ async function main(): Promise<void> {
     console.warn(
       `  ⚠ studio-plate ontbreekt (${cfg.SYNTH.backgroundPlatePath}) — achtergrond blijft uit het model komen`,
     );
+  }
+
+  // De plaat er deterministisch op: het model tekende een blanco houder, wij
+  // warpen het echte asset erop. Zo kan de plaat per definitie niet meer fout
+  // zijn — en verdwijnt een hele klasse afkeuringen.
+  if (cli.plateAfter) {
+    try {
+      const result = await mountPlate(accepted, cfg.PLATE, CACHE_DIR, cli.useCache);
+      if (result.mounted) {
+        accepted = result.image;
+        console.log("  plaat deterministisch gemonteerd");
+      } else {
+        console.warn(`  ⚠ plaat niet gemonteerd: ${result.reason ?? "onbekend"}`);
+      }
+    } catch (err) {
+      console.warn(
+        `  ⚠ plaatmontage mislukt (${err instanceof Error ? err.message : err})`,
+      );
+    }
   }
 
   // het goedgekeurde studiobeeld ÍS het eindresultaat (besluit 2026-07-30):
