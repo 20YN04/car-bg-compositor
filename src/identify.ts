@@ -91,10 +91,22 @@ export async function compareAgainstSources(
     'Answer with STRICT JSON only, no code fences: {"same_vehicle": ' +
     'boolean, "paint_match": boolean, "issues": string[]} — issues stays ' +
     "empty when everything matches.";
-  const raw = await geminiText(
-    [candidate, ...sources], prompt, cfg, cacheDir, useCache,
-  );
-  return parseVerdict(raw);
+  // Twee stemmen, en bij onenigheid een derde. Eén oordeel is wisselvallig:
+  // op de BMW i5 Touring keurde de inspectie twaalf keer op rij af als
+  // "compacte X1", terwijl de kandidaat bij eigen inspectie onmiskenbaar de
+  // juiste lange break was (2026-08-03). Een enkele mening mag geen goed
+  // beeld vernietigen; drie eensgezinde stemmen mag dat wel.
+  const ask = async (pass: number) =>
+    parseVerdict(await geminiText(
+      [candidate, ...sources],
+      `${prompt}\n(inspection pass ${pass} — judge independently)`,
+      cfg, cacheDir, useCache,
+    ));
+  const first = await ask(1);
+  if (first.sameVehicle) return first;
+  const second = await ask(2);
+  if (second.sameVehicle) return second;
+  return first;
 }
 
 /** Tolerant parsen: modellen verpakken JSON graag alsnog in fences of proza. */
