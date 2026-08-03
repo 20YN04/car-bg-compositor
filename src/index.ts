@@ -16,7 +16,7 @@ import {
   paintDeviation,
 } from "./identify.js";
 import { getCutout, maskStats, noteFalFailure } from "./mask.js";
-import { cutoutMeans, medianMeans, type ChannelMeans } from "./measure.js";
+import { cutoutMeans, detailStrength, medianMeans, type ChannelMeans } from "./measure.js";
 import { carBox, measureFill, normalizeScale, replaceBackground } from "./background.js";
 import { checkGeometry, wheelbaseRatio } from "./geometry.js";
 import { florenceBoxes, mountPlate, tightPlateBox } from "./plate.js";
@@ -645,6 +645,18 @@ async function synthesizeAngle(
         "tint wordt niet deterministisch afgedwongen, alleen lichtheid",
     );
   }
+  // Detaildichtheid van de bronfoto's: de eerlijke maatstaf voor de scherpte
+  // van de uitvoer, want het is dezelfde auto in dezelfde kleur. Het anker is
+  // dat niet, en dat is precies waar de oude kwaliteitspoort op strandde.
+  const srcDetails: number[] = [];
+  for (const r of refs) srcDetails.push(await detailStrength(r.data));
+  srcDetails.sort((a, b) => a - b);
+  const srcDetail = srcDetails.length > 0
+    ? srcDetails[Math.floor((srcDetails.length - 1) / 2)]!
+    : null;
+  if (srcDetail !== null) {
+    console.log(`  detaildichtheid bronfoto's (mediaan): ${srcDetail.toFixed(1)}`);
+  }
   const srcMedian = srcMeans.length > 0 ? medianMeans(srcMeans) : null;
   if (!srcMedian) {
     console.warn(
@@ -783,6 +795,21 @@ async function synthesizeAngle(
     const qual = hasAnchor
       ? await checkQuality({ data: img }, genRefs[0]!, cfg.GEMINI, CACHE_DIR, cli.useCache)
       : { qualityOk: true, issues: [] };
+    // Scherpte wordt gemeten, niet beoordeeld: de detaildichtheid van de
+    // uitvoer tegen die van de bronfoto's van dezelfde auto.
+    if (srcDetail !== null && srcDetail > 0) {
+      const ratio = (await detailStrength(img)) / srcDetail;
+      if (ratio < cfg.SYNTH.minDetailRatio) {
+        qual.qualityOk = false;
+        qual.issues.push(
+          `detaildichtheid ${(ratio * 100).toFixed(0)}% van de bronfoto's ` +
+            `(ondergrens ${(cfg.SYNTH.minDetailRatio * 100).toFixed(0)}%) — ` +
+            "de render is zichtbaar zachter dan de echte foto's",
+        );
+      } else {
+        console.log(`  scherpte gemeten: ${(ratio * 100).toFixed(0)}% van de bronfoto's`);
+      }
+    }
     // deterministische geometrie-poorten vóór de (betaalde) inspecties: een
     // te klein gerenderde of samengedrukte koets is meetbaar — de VLM liet
     // op een ongelukkige worp een 74%-Tesla door waar 85% hoorde

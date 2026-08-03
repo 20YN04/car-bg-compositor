@@ -66,6 +66,7 @@ describe("paintDeviation", () => {
     maxAttempts: 3,
     goedGenoegAfwijkingen: 2,
     kwaliteitHerhaling: 2,
+    minDetailRatio: 0.55,
     minLumaRatio: 0.85,
     maxLumaRatio: 1.15,
     maxTintDelta: 0.05,

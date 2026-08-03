@@ -271,25 +271,32 @@ export async function checkQuality(
   cacheDir: string,
   useCache: boolean,
 ): Promise<QualityVerdict> {
+  // Deze poort vroeg vroeger of de kandidaat "even scherp als de referentie"
+  // was, met het anker — een zwarte AMG — als maatstaf. Dat oordeel bleek
+  // onbetrouwbaar én onuitvoerbaar: op de witte VW ID.3 sneuvelden zes van de
+  // zes pogingen op dezelfde klacht, terwijl de gemeten detaildichtheid van de
+  // uitvoer gelijk was aan die van de échte studiofoto's (2026-08-03).
+  // Scherpte wordt nu gemeten in measure.ts; hier vragen we alleen nog naar
+  // wat een meting niet kan zien.
   const prompt =
-    "The FIRST image is a candidate catalogue photo. The SECOND image is " +
-    "the QUALITY REFERENCE: the required standard of professional studio " +
-    "photography.\n" +
-    "Judge ONLY the image quality and rendering of the candidate — not the " +
-    "vehicle, not the composition. It must match the reference standard: " +
-    "tack-sharp panel lines and badges, clean realistic reflections, " +
-    "believable materials, no blur, no noise, no compression artifacts, no " +
-    "The candidate intentionally carries a Carredo dealer plate in the " +
-    "car's own plate position: a white plate with a blue wing mark, the " +
-    "blue 'Carredo' logotype and a green-to-blue strip. That plate belongs " +
-    "there and is checked elsewhere — never report it as a watermark, a " +
-    "sticker, an extraneous element or a rendering fault.\n" +
-    "soft plasticky toy-like or over-smoothed rendering, no watermark " +
-    "remnants. Low-quality source photos are never an excuse — the output " +
-    "must look like it was shot in the reference's studio with the " +
-    "reference's camera.\n" +
+    "The FIRST image is a candidate catalogue photo. The SECOND image is a " +
+    "reference showing the intended studio look.\n" +
+    "Do NOT judge sharpness, resolution, focus or how crisp the panel lines " +
+    "look — those are measured separately and are not your concern. Do NOT " +
+    "compare the two vehicles; they are different cars.\n" +
+    "Report ONLY concrete rendering faults you can point at in the candidate: " +
+    "visible compression blocks or banding, chromatic noise, warped or " +
+    "duplicated structures, melted or nonsensical geometry, garbled lettering " +
+    "outside the number plate, stray objects, watermark or logo remnants from " +
+    "another source, and areas blown to pure white with no detail left.\n" +
+    "The candidate intentionally carries a Carredo dealer plate in the car's " +
+    "own plate position: a white plate with a blue wing mark, the blue " +
+    "'Carredo' logotype and a green-to-blue strip. That plate belongs there " +
+    "and is checked elsewhere — never report it as a watermark, a sticker, an " +
+    "extraneous element or a rendering fault.\n" +
+    "If you cannot point at a specific fault, the quality is fine.\n" +
     'Answer with STRICT JSON only, no code fences: {"quality_ok": boolean, ' +
-    '"issues": string[]} — issues stays empty when the quality matches.';
+    '"issues": string[]} — issues stays empty when you found no fault.';
   const raw = await geminiText([candidate, anchor], prompt, cfg, cacheDir, useCache);
   const match = raw.match(/\{[\s\S]*\}/);
   if (match) {

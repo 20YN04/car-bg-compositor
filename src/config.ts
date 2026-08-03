@@ -73,6 +73,20 @@ export interface SynthConfig {
    */
   kwaliteitHerhaling: number;
   /**
+   * Ondergrens voor de gemeten detaildichtheid van de uitvoer, als fractie
+   * van de mediaan over de bronfoto's van dezelfde auto. Vergelijken met de
+   * eigen bron is de eerlijke maat: het anker is een andere auto in een
+   * andere kleur.
+   *
+   * Geijkt op alle tien de tot nu toe goedgekeurde thumbnails (2026-08-03).
+   * Die spreiden van 0.65 (BMW i5, uitzonderlijk scherpe bronfoto's) tot
+   * 1.39 (Renault Scenic, matige bronfoto's die de pipeline juist opknapt).
+   * 0.55 laat dat hele veld door en vangt alleen een render die echt is
+   * weggesmolten. Er zit nog geen enkel afgekeurd voorbeeld in de ijking,
+   * dus de drempel is bewust laag: hij mag vangen, niet gokken.
+   */
+  minDetailRatio: number;
+  /**
    * Deterministische lakcontrole: de gemiddelde lak van de kandidaat (via
    * de matte) moet binnen deze band van de bron-mediaan blijven. De
    * VLM-inspectie alleen bleek te vergeeflijk — zilver dat wit rendert kwam
@@ -159,6 +173,7 @@ export const defaultConfig: Config = {
     maxAttempts: 6,
     goedGenoegAfwijkingen: 2,
     kwaliteitHerhaling: 2,
+    minDetailRatio: 0.55,
     minLumaRatio: 0.85,
     maxLumaRatio: 1.15,
     maxTintDelta: 0.05,

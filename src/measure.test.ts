@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { cutoutMeans, medianMeans } from "./measure.js";
+import sharp from "sharp";
+import { cutoutMeans, detailStrength, medianMeans } from "./measure.js";
 
 function makeCutout(r: number, g: number, b: number): {
   rgba: Buffer;
@@ -45,5 +46,35 @@ describe("medianMeans", () => {
 
   it("geeft neutraal grijs voor een lege lijst", () => {
     expect(medianMeans([])).toEqual({ r: 128, g: 128, b: 128 });
+  });
+});
+
+describe("detailStrength", () => {
+  // De poort staat of valt met de vraag of dit getal écht op onscherpte
+  // reageert. Een vervaagde kopie van hetzelfde beeld moet meetbaar lager
+  // uitkomen — anders meet het iets anders dan scherpte.
+  it("meet een vervaagde kopie lager dan het origineel", async () => {
+    const scherp = await sharp({
+      create: { width: 400, height: 400, channels: 3, background: "#ffffff" },
+    })
+      .composite([
+        {
+          input: Buffer.from(
+            '<svg width="400" height="400">' +
+              '<rect x="40" y="40" width="120" height="320" fill="#101010"/>' +
+              '<rect x="220" y="40" width="60" height="320" fill="#202020"/>' +
+              "</svg>",
+          ),
+          top: 0,
+          left: 0,
+        },
+      ])
+      .jpeg({ quality: 98 })
+      .toBuffer();
+    const vaag = await sharp(scherp).blur(6).jpeg({ quality: 98 }).toBuffer();
+
+    const a = await detailStrength(scherp);
+    const b = await detailStrength(vaag);
+    expect(b).toBeLessThan(a * 0.7);
   });
 });
