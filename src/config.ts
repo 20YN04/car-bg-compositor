@@ -10,6 +10,13 @@
  */
 
 export interface GeminiConfig {
+  /**
+   * Model voor de poortoordelen. Het dagquotum van Gemini geldt per model,
+   * dus inspecties op het beeldmodel eten het generatiebudget op: gemeten in
+   * car-multiview waren 112 van de 138 calls op één auto poortoordelen
+   * (2026-08-01). Bij een onbekende naam valt gemini.ts terug op `modelId`.
+   */
+  textModelId: string;
   /** Gemini 3 Pro met image-generation (Nano Banana Pro). */
   modelId: string;
   /**
@@ -110,6 +117,7 @@ export interface Config {
 export const defaultConfig: Config = {
   GEMINI: {
     modelId: "gemini-3-pro-image",
+    textModelId: process.env["GEMINI_TEXT_MODEL"] || "gemini-2.5-flash",
     aspectRatio: "3:2",
     imageSize: "2K",
   },

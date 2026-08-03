@@ -49,7 +49,8 @@ export async function geminiText(
   cacheDir: string,
   useCache: boolean,
 ): Promise<string> {
-  const h = createHash("sha256").update(prompt).update(cfg.modelId);
+  const model = cfg.textModelId || cfg.modelId;
+  const h = createHash("sha256").update(prompt).update(model);
   for (const i of images) h.update(i.data);
   const cachePath = path.join(cacheDir, `${h.digest("hex")}.gtext.json`);
   if (useCache && existsSync(cachePath)) {
@@ -62,10 +63,16 @@ export async function geminiText(
   // is de correcte input voor deze use case (zie Google docs voorbeelden).
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const interactions: any = (client as GoogleGenAI & { interactions: unknown }).interactions;
-  const interaction = await interactions.create({
-    model: cfg.modelId,
-    input: [{ type: "text", text: prompt }, ...images.map(toImageInput)],
-  });
+  const input = [{ type: "text", text: prompt }, ...images.map(toImageInput)];
+  let interaction: { output_text?: unknown };
+  try {
+    interaction = await interactions.create({ model, input });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (model === cfg.modelId || !/not found|unsupported|invalid|404/i.test(msg)) throw err;
+    console.warn(`  ⚠ tekstmodel "${model}" niet bruikbaar — teruggevallen op ${cfg.modelId}`);
+    interaction = await interactions.create({ model: cfg.modelId, input });
+  }
   geminiStats.calls++;
 
   const text = interaction.output_text;

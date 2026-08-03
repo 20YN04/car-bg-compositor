@@ -30,6 +30,13 @@ interface CliOptions {
   synth?: string;
   /** Bestaande thumbnail van deze map alsnog van de Carredo-plaat voorzien. */
   mountPlate?: string;
+  /**
+   * Voertuigspec uit contract of database — overschrijft de AI-identificatie.
+   * Uitvoeringen die alleen op badgeniveau verschillen (eDrive40 met
+   * M-pakket versus M60) zijn uit foto's niet betrouwbaar te raden, en dan
+   * gokt de identificatie. Wie de auto kent, wint.
+   */
+  vehicle?: string;
   useCache: boolean;
 }
 
@@ -37,6 +44,7 @@ function parseCli(): { cfg: Config; cli: CliOptions } {
   const { values } = parseArgs({
     options: {
       synth: { type: "string" },
+      vehicle: { type: "string" },
       "mount-plate": { type: "string" },
       matte: { type: "string" },
       "rembg-model": { type: "string" },
@@ -57,6 +65,9 @@ function parseCli(): { cfg: Config; cli: CliOptions } {
     cfg,
     cli: {
       synth: values.synth,
+      vehicle: typeof values.vehicle === "string" && values.vehicle.trim()
+        ? values.vehicle.trim()
+        : undefined,
       mountPlate: values["mount-plate"],
       useCache: !values["no-cache"],
     },
@@ -343,7 +354,8 @@ async function synthesizeAngle(
     });
   }
   const identity = await identifyVehicle(refs, cfg.GEMINI, CACHE_DIR, cli.useCache);
-  const spec = identity.spec;
+  const spec = cli.vehicle ?? identity.spec;
+  if (cli.vehicle) console.log(`  voertuig (opgegeven): ${spec}`);
   const fillPct = targetFrameFill(identity.lengthM);
   console.log(
     `  voertuig: ${spec}\n  lengte ~${identity.lengthM.toFixed(2)} m → kadervulling ~${Math.round(fillPct * 100)}%`,
