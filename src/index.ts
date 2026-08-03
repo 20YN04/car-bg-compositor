@@ -19,7 +19,7 @@ import { getCutout, maskStats, noteFalFailure } from "./mask.js";
 import { cutoutMeans, medianMeans, type ChannelMeans } from "./measure.js";
 import { measureFill, normalizeScale, replaceBackground } from "./background.js";
 import { checkGeometry, wheelbaseRatio } from "./geometry.js";
-import { mountPlate, tightPlateBox } from "./plate.js";
+import { florenceBoxes, mountPlate, tightPlateBox } from "./plate.js";
 
 const IN_DIR = "./in";
 const OUT_DIR = "./out";
@@ -30,6 +30,15 @@ interface CliOptions {
   synth?: string;
   /** Bestaande thumbnail van deze map alsnog van de Carredo-plaat voorzien. */
   mountPlate?: string;
+  /**
+   * Wielbasis gedeeld door wieldiameter, uit de fabrieksspecs. Vult het
+   * cijfer in dat de pipeline normaal uit een zuiver zijaanzicht meet. Zonder
+   * zo'n foto ligt de wielbasis-poort stil en blijft alleen een VLM-oordeel
+   * over ("lijkt een compacte auto"), wat geen bruikbare feedback oplevert.
+   * Met dit getal wordt het een meting met een cijfer erbij, en dus feedback
+   * waar de volgende poging iets mee kan.
+   */
+  wheelbaseRatio?: number;
   /**
    * Voertuigspec uit contract of database — overschrijft de AI-identificatie.
    * Uitvoeringen die alleen op badgeniveau verschillen (eDrive40 met
@@ -45,6 +54,7 @@ function parseCli(): { cfg: Config; cli: CliOptions } {
     options: {
       synth: { type: "string" },
       vehicle: { type: "string" },
+      "wheelbase-ratio": { type: "string" },
       "mount-plate": { type: "string" },
       matte: { type: "string" },
       "rembg-model": { type: "string" },
@@ -67,6 +77,9 @@ function parseCli(): { cfg: Config; cli: CliOptions } {
       synth: values.synth,
       vehicle: typeof values.vehicle === "string" && values.vehicle.trim()
         ? values.vehicle.trim()
+        : undefined,
+      wheelbaseRatio: values["wheelbase-ratio"] !== undefined
+        ? Number(values["wheelbase-ratio"])
         : undefined,
       mountPlate: values["mount-plate"],
       useCache: !values["no-cache"],
@@ -250,6 +263,61 @@ function targetFrameFill(lengthM: number): number {
   return Math.min(0.88, Math.max(0.45, 0.884 * (lengthM / 4.95)));
 }
 
+/**
+ * Uitvergrote close-up van het beste wiel uit de bronfoto's, als extra
+ * referentie voor de generatie. Het model kopieert een velg niet, het verzint
+ * er een plausibele bij; in een volledige foto is de velg te klein om af te
+ * lezen. Score = oppervlak x rondheid, want een wiel recht van opzij toont
+ * het spaakpatroon en een schuin wiel is een ellips waarin niets te zien is.
+ * Overgenomen uit car-multiview (2026-08-03), waar dit het velgprobleem
+ * oploste dat zes pogingen op rij kostte.
+ */
+async function wheelCloseUp(
+  refs: ImagePart[],
+  cfg: Config,
+  useCache: boolean,
+): Promise<ImagePart | null> {
+  let best: { part: ImagePart; score: number; note: string } | null = null;
+  for (const [i, ref] of refs.entries()) {
+    try {
+      const boxes = await florenceBoxes(
+        ref.data, "wheel", "wheelref", cfg.PLATE.detectionModelId, CACHE_DIR, useCache,
+      );
+      for (const box of boxes) {
+        if (box.w < 120 || box.h < 120) continue;
+        const roundness = 1 - Math.abs(1 - box.w / Math.max(1, box.h));
+        if (roundness < 0.75) continue;
+        const score = box.w * box.h * roundness;
+        if (best && score <= best.score) continue;
+        const meta = await sharp(ref.data).metadata();
+        const w = meta.width ?? 0, h = meta.height ?? 0;
+        if (!w || !h) continue;
+        const pad = box.w * 0.12;
+        const left = Math.max(0, Math.round(box.x - pad));
+        const top = Math.max(0, Math.round(box.y - pad));
+        const width = Math.min(w - left, Math.round(box.w + pad * 2));
+        const height = Math.min(h - top, Math.round(box.h + pad * 2));
+        if (width < 120 || height < 120) continue;
+        best = {
+          score,
+          note: `foto ${i + 1}, ${width}x${height}px, rondheid ${roundness.toFixed(2)}`,
+          part: {
+            data: await sharp(ref.data)
+              .extract({ left, top, width, height })
+              .resize({ width: 1100, withoutEnlargement: false })
+              .jpeg({ quality: 95 })
+              .toBuffer(),
+          },
+        };
+      }
+    } catch {
+      // detectie mislukt op dit beeld: volgende proberen
+    }
+  }
+  if (best) console.log(`  velgreferentie: ${best.note}`);
+  return best?.part ?? null;
+}
+
 /** Sterkte van de kleurzweem over een heel beeld: 0 is neutraal. */
 async function sceneCast(filePath: string): Promise<number> {
   const stats = await sharp(filePath).stats();
@@ -269,6 +337,7 @@ function synthPrompt(
   feedback: string[],
   hasAnchor: boolean,
   hasPlate: boolean,
+  hasWheelRef: boolean,
   fillPct: number,
 ): string {
   let p = `Create a professional catalogue photo of this exact vehicle: ${spec}.\n`;
@@ -315,6 +384,13 @@ function synthPrompt(
     "the source photo quality — reconstruct crisp panel lines, badges and " +
     "reflections cleanly; never reproduce blur, noise, compression " +
     "artifacts or watermarks from the source photos.\n" +
+    (hasWheelRef
+      ? "WHEELS: one of the attached images is a CLOSE-UP of this car's " +
+        "actual wheel. Copy that wheel exactly: the number of spokes, their " +
+        "shape and thickness, which parts are dark and which are bright " +
+        "machined metal, and the centre cap. Do not substitute a different " +
+        "alloy design, however plausible it looks.\n"
+      : "") +
     (hasPlate
       ? "LICENCE PLATE: the LAST attached image is the exact Carredo " +
         "dealer plate (white plate, blue Carredo wordmark, holder with a " +
@@ -441,6 +517,17 @@ async function synthesizeAngle(
     );
   }
 
+  const wheelRef = await wheelCloseUp(refs, cfg, cli.useCache);
+  if (!wheelRef) {
+    console.log("  ⚠ geen bruikbaar wiel in de bronfoto's — geen velgreferentie");
+  } else {
+    // vóór de plaat invoegen: die moet de laatste blijven, daar verwijst de
+    // prompt naar
+    const plateIdx = genRefs.findIndex((r) => r === plateAsset);
+    genRefs = plateIdx >= 0
+      ? [...genRefs.slice(0, plateIdx), wheelRef, genRefs[plateIdx]!]
+      : [...genRefs, wheelRef];
+  }
   const anchorBg = hasAnchor ? await backgroundMeans(genRefs[0]!.data) : null;
 
   // geometrie-referentie: het meest zijdelingse bronbeeld geeft de echte
@@ -456,6 +543,13 @@ async function synthesizeAngle(
     }
   }
   if (sideRatio !== null && sideRatio < 3.3) sideRatio = null;
+  if (cli.wheelbaseRatio !== undefined && Number.isFinite(cli.wheelbaseRatio)) {
+    sideRatio = cli.wheelbaseRatio;
+    console.log(
+      `  wielbasis/wieldiameter uit specs: ${sideRatio.toFixed(2)} — ` +
+        "geometriepoort actief zonder zijaanzicht in de bronset",
+    );
+  }
   if (sideRatio === null) {
     console.warn("  ⚠ geen betrouwbaar zijaanzicht in de bronset — geometriepoort inactief");
   }
@@ -464,7 +558,8 @@ async function synthesizeAngle(
   let feedback: string[] = [];
   for (let attempt = 0; attempt < cfg.SYNTH.maxAttempts; attempt++) {
     let img = await generateNovelView(
-      genRefs, synthPrompt(spec, feedback, hasAnchor, plateAsset !== null, fillPct),
+      genRefs,
+      synthPrompt(spec, feedback, hasAnchor, plateAsset !== null, wheelRef !== null, fillPct),
       cfg.GEMINI, CACHE_DIR, cli.useCache, cfg.SYNTH.seed + attempt,
     );
     // harde dimensiepoort vóór de (betaalde) inspectie: het model rendert

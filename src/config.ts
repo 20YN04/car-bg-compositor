@@ -137,7 +137,9 @@ export const defaultConfig: Config = {
     seed: 20260724,
     // 4 sinds de decor-poort: die verbruikt geregeld een poging voordat de
     // inhoudelijke poorten aan de beurt komen
-    maxAttempts: 4,
+    // 6 sinds de geometrie- en decorpoorten: die verbruiken samen geregeld
+    // drie pogingen voordat de inhoudelijke poorten aan bod komen
+    maxAttempts: 6,
     minLumaRatio: 0.85,
     maxLumaRatio: 1.15,
     maxTintDelta: 0.05,
