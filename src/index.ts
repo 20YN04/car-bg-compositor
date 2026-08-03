@@ -692,7 +692,10 @@ async function synthesizeAngle(
     // plaat-poort: het model monteert de plaat zelf, dus er moet een aparte
     // controle op zitten dat logo/tekst exact kloppen en de plaat niet
     // uitgerekt of buitenmaats is
-    const plate = plateAsset
+    // Wordt de plaat achteraf overschreven, dan hoeft hij nu niet te
+    // kloppen: een mislukte modelplaat kost dan geen poging meer. We maken
+    // er straks eerst een blanco houder van en zetten het asset erin.
+    const plate = plateAsset && !cli.plateAfter
       ? await checkPlate({ data: img }, plateAsset, cfg.GEMINI, CACHE_DIR, cli.useCache)
       : { plateOk: true, issues: [] };
     // kwaliteitspoort: het anker is de standaard — slechte bronfoto's zijn

@@ -436,9 +436,29 @@ export async function mountPlate(
     .png()
     .toBuffer();
 
+  // Eerst het oude plaatvlak dichtschilderen, dan pas het asset erop. Zonder
+  // die stap schemeren restanten van de plaat die het model zélf tekende door
+  // langs de randen — verkeerde letters, een blauwe EU-band die er niet hoort.
+  // Zo hoeft een mislukte modelplaat ook nooit meer een poging te kosten: we
+  // maken er eenvoudig eerst een blanco houder van (Yentl, 2026-08-03).
+  const blankPoly = [badgeQuad.tl, badgeQuad.tr, badgeQuad.br, badgeQuad.bl]
+    .map((p) => `${(p.x - bx).toFixed(1)},${(p.y - by).toFixed(1)}`)
+    .join(" ");
+  const blank = await sharp(
+    Buffer.from(
+      `<svg width="${bw}" height="${bh}" xmlns="http://www.w3.org/2000/svg">` +
+        `<polygon points="${blankPoly}" fill="#f2f2f0" stroke="#f2f2f0" ` +
+        `stroke-width="6"/></svg>`,
+    ),
+  )
+    .blur(0.6)
+    .png()
+    .toBuffer();
+
   const image = await sharp(imageJpeg)
     .composite([
       { input: shadow, left: bx, top: by },
+      { input: blank, left: bx, top: by },
       { input: warped, left: Math.max(0, place.left), top: Math.max(0, place.top) },
     ])
     .jpeg({ quality: 96 })
