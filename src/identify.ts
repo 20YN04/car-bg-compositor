@@ -211,7 +211,9 @@ export async function checkPlate(
     "Verify the plate on the car: (1) it reproduces the reference exactly " +
     "— the blue wing logo mark followed by the blue lowercase-style " +
     "'Carredo' logotype on a white plate, plus the green-to-blue leasing " +
-    "strip at the bottom. A plate with plain dark CAPITAL letters " +
+    "strip at the bottom. It is a DEALER plate: a blue EU band on the left, " +
+    "a circle of stars, a country letter or any registration characters are " +
+    "WRONG and must be reported. A plate with plain dark CAPITAL letters " +
     "'CARREDO', a missing wing mark, a missing strip, or any other " +
     "typography than the reference is WRONG; (2) it is NOT stretched, " +
     "squashed or warped out of its natural proportions; (3) its size is " +

@@ -467,7 +467,10 @@ function synthPrompt(
     (hasPlate
       ? "LICENCE PLATE: the LAST attached image is the exact Carredo " +
         "dealer plate (white plate, blue Carredo wordmark, holder with a " +
-        "green-to-blue leasing strip at the bottom). Mount THIS plate on " +
+        "green-to-blue leasing strip at the bottom). It is a DEALER plate, " +
+        "not a registration plate: it has NO blue EU band on the left, NO " +
+        "circle of stars, NO country letter and NO registration characters. " +
+        "Never add one. Mount THIS plate on " +
         "the front of the car, in the car's own plate position, at " +
         "REALISTIC size — a standard European front plate, about 52 cm " +
         "wide on the real car — angled with the bumper perspective. " +
