@@ -964,7 +964,14 @@ async function main(): Promise<void> {
   // zijn — en verdwijnt een hele klasse afkeuringen.
   if (cli.plateAfter) {
     try {
-      const result = await mountPlate(accepted, cfg.PLATE, CACHE_DIR, cli.useCache);
+      const mountPath = path.join(CACHE_DIR, "mount-tmp.jpg");
+      await writeFile(mountPath, accepted);
+      const mountCut = await getCutout(mountPath, CACHE_DIR, cfg.FAL, cfg.MATTE, cli.useCache);
+      const bounds = await carBox(mountCut);
+      await rm(mountPath, { force: true });
+      const result = await mountPlate(
+        accepted, cfg.PLATE, CACHE_DIR, cli.useCache, bounds,
+      );
       if (result.mounted) {
         accepted = result.image;
         console.log("  plaat deterministisch gemonteerd");

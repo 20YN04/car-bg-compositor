@@ -274,6 +274,13 @@ export async function mountPlate(
   cfg: PlateConfig,
   cacheDir: string,
   useCache: boolean,
+  /**
+   * Bbox van de auto. Zonder deze grens landde de plaat op de BMW half naast
+   * de bumper in de achtergrond: de detectie pakt op een blanco houder soms
+   * een verkeerde zone (2026-08-03). Met de omtrek erbij kunnen we eisen dat
+   * de plaat binnen de auto valt en niet breder is dan een echte plaat.
+   */
+  carBounds?: { left: number; top: number; width: number; height: number } | null,
 ): Promise<MountResult> {
   if (!existsSync(cfg.assetPath)) {
     return { image: imageJpeg, mounted: false, reason: `asset ontbreekt: ${cfg.assetPath}` };
@@ -301,6 +308,17 @@ export async function mountPlate(
     .filter((b) => b.w / Math.max(1, b.h) >= 1.5 && b.w / Math.max(1, b.h) <= 9)
     .filter((b) => (b.w * b.h) / (width * height) < 0.05)
     .filter((b) => b.y + b.h / 2 > height * 0.5)
+    // binnen de auto blijven, en niet breder dan een echte plaat: een
+    // Europese plaat is ~52 cm op een auto van ~1.9 m, dus hooguit een
+    // derde van de koetsbreedte in beeld
+    .filter((b) => {
+      if (!carBounds) return true;
+      const cx = b.x + b.w / 2, cy = b.y + b.h / 2;
+      const inside =
+        cx >= carBounds.left && cx <= carBounds.left + carBounds.width &&
+        cy >= carBounds.top && cy <= carBounds.top + carBounds.height;
+      return inside && b.w <= carBounds.width / 3;
+    })
     .sort((a, b) => b.w * b.h - a.w * a.h);
   const box = candidates[0];
   if (!box) {
