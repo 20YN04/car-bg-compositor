@@ -302,6 +302,17 @@ async function bodyCloseUp(
       const meta = await sharp(src).metadata();
       const w = meta.width ?? 0, h = meta.height ?? 0;
       if (!w || !h || box.width < w * 0.25) continue;
+      // De auto moet er HELEMAAL op staan. Zonder deze eis wint de foto
+      // waarop hij het breedst is — en dat is juist de opname waarop hij is
+      // aangesneden, want dan raakt de omtrek beide beeldranden. Als
+      // referentie voor verhoudingen is een afgesneden auto waardeloos
+      // (gemeten op de EQE AMG, 2026-08-03: gekozen foto besloeg "100% van
+      // de breedte", oftewel links en rechts eraf).
+      const marge = Math.max(4, Math.round(w * 0.01));
+      const volledig =
+        box.left > marge && box.left + box.width < w - marge &&
+        box.top > marge && box.top + box.height < h - marge;
+      if (!volledig) continue;
       if (best && box.width <= best.width) continue;
       const pad = Math.round(box.width * 0.04);
       const left = Math.max(0, box.left - pad);
@@ -324,6 +335,7 @@ async function bodyCloseUp(
     }
   }
   if (best) console.log(`  koetsreferentie: ${best.note}`);
+  else console.log("  ⚠ geen foto met de auto volledig in beeld — geen koetsreferentie");
   return best?.part ?? null;
 }
 
@@ -347,8 +359,16 @@ async function wheelCloseUp(
       const boxes = await florenceBoxes(
         ref.data, "wheel", "wheelref", cfg.PLATE.detectionModelId, CACHE_DIR, useCache,
       );
+      const meta0 = await sharp(ref.data).metadata();
+      const iw = meta0.width ?? 0, ih = meta0.height ?? 0;
       for (const box of boxes) {
         if (box.w < 120 || box.h < 120) continue;
+        // Een wiel is klein. Zonder bovengrens wint een detectie die het hele
+        // beeld beslaat — op de EQE koos hij een kader van 1200x1600, dus de
+        // volledige foto (2026-08-03). Een wiel haalt in een autofoto zelden
+        // meer dan een derde van de beeldbreedte.
+        if (!iw || !ih) continue;
+        if (box.w > iw * 0.4 || box.h > ih * 0.4) continue;
         const roundness = 1 - Math.abs(1 - box.w / Math.max(1, box.h));
         if (roundness < 0.75) continue;
         const score = box.w * box.h * roundness;
