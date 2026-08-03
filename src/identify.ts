@@ -70,9 +70,17 @@ export async function compareAgainstSources(
   cacheDir: string,
   useCache: boolean,
 ): Promise<IdentityVerdict> {
+  // Alleen de modelnaam, niet de volledige spec: de inspecteur las vroeger
+  // dezelfde beschrijving als de generator en citeerde die terug, waarna hij
+  // twaalf keer op rij een correcte BMW i5 Touring afkeurde als X1 omdat mijn
+  // spec die namen noemde. Een wielbasis-meting bewees dat de kandidaat
+  // klopte (2026-08-03). Hij moet toetsen aan de FOTO'S.
+  const korteSpec = spec.split(/[—.]/)[0]?.trim().slice(0, 90) || spec.slice(0, 90);
   const prompt =
     "The FIRST image is a candidate catalogue image. Every other image is a " +
-    `source photo of the real vehicle: ${spec}.\n` +
+    `source photo of the real vehicle (${korteSpec}).\n` +
+    "The source photos are the ONLY truth. Judge the candidate against what " +
+    "you see in them, never against expectations from the model name.\n" +
     "Compare the candidate against the sources like a vehicle inspector. " +
     "Check the exact model and generation, paint colour, wheel design, " +
     "badges, head- and taillights, grille, trim, roof line, mirrors, door " +
