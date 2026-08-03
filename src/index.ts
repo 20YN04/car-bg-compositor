@@ -424,6 +424,7 @@ function synthPrompt(
   hasWheelRef: boolean,
   hasBodyRef: boolean,
   fillPct: number,
+  heeftVorige = false,
 ): string {
   let p = `Create a professional catalogue photo of this exact vehicle: ${spec}.\n`;
   if (hasAnchor) {
@@ -500,7 +501,16 @@ function synthPrompt(
       : "LICENCE PLATE: an empty blank pale-grey front plate in correct " +
         "European proportions — a WIDE SHORT rectangle, about 4.5 times " +
         "wider than tall. No characters.");
-  if (feedback.length > 0) {
+  if (feedback.length > 0 && heeftVorige) {
+    p +=
+      "\nThe LAST attached image is your own PREVIOUS ATTEMPT. It was " +
+      "already right in most respects. Reproduce it as closely as you can — " +
+      "the same car, the same camera angle, the same framing and size in " +
+      "the frame, the same studio, the same lighting and shadow — and " +
+      "change ONLY the points listed here. Do not restyle anything that is " +
+      "not on this list:\n" +
+      feedback.map((f) => `- ${f}`).join("\n");
+  } else if (feedback.length > 0) {
     p +=
       "\nA previous attempt was rejected by inspection for these " +
       "deviations — correct every one of them:\n" +
@@ -660,12 +670,19 @@ async function synthesizeAngle(
   let best: { img: Buffer; issues: string[] } | null = null;
   let fallback: { img: Buffer; issues: string[] } | null = null;
   let feedback: string[] = [];
+  // De vorige poging als vertrekpunt. Bij een afkeuring is de rest van dat
+  // beeld meestal wél goed — de auto, de hoek, het licht, het decor. Alles
+  // weggooien betekent dat je al die geslaagde eigenschappen opnieuw moet
+  // winnen, en dat is waarom elke poging op iets ánders faalde dan de
+  // vorige (Yentl, 2026-08-03).
+  let vorigeKandidaat: ImagePart | null = null;
   for (let attempt = 0; attempt < cfg.SYNTH.maxAttempts; attempt++) {
+    const refsNu = vorigeKandidaat ? [...genRefs, vorigeKandidaat] : genRefs;
     let img = await generateNovelView(
-      genRefs,
+      refsNu,
       synthPrompt(
         spec, feedback, hasAnchor, plateAsset !== null, wheelRef !== null,
-        bodyRef !== null, fillPct,
+        bodyRef !== null, fillPct, vorigeKandidaat !== null,
       ),
       cfg.GEMINI, CACHE_DIR, cli.useCache, cfg.SYNTH.seed + attempt,
     );
@@ -866,6 +883,8 @@ async function synthesizeAngle(
         `: ${allIssues.join("; ") || "(geen detail opgegeven)"}`,
     );
     if (allIssues.length > 0) feedback = allIssues;
+    // deze poging wordt het vertrekpunt voor de volgende
+    vorigeKandidaat = { data: img };
   }
   if (!best && fallback) {
     console.warn(
