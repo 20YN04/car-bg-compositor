@@ -541,9 +541,10 @@ async function synthesizeAngle(
   let plateAsset: ImagePart | null = null;
   if (cli.plateAfter) {
     console.log(
-      "  plaat: blanco laten tekenen en na afloop deterministisch monteren",
+      "  plaat: door het model laten plaatsen, daarna deterministisch overschrijven",
     );
-  } else if (existsSync(cfg.PLATE.assetPath)) {
+  }
+  if (existsSync(cfg.PLATE.assetPath)) {
     plateAsset = { data: await readFile(cfg.PLATE.assetPath), mime: "image/png" };
     genRefs = [...genRefs, plateAsset];
   } else {
@@ -959,9 +960,15 @@ async function main(): Promise<void> {
     );
   }
 
-  // De plaat er deterministisch op: het model tekende een blanco houder, wij
-  // warpen het echte asset erop. Zo kan de plaat per definitie niet meer fout
-  // zijn — en verdwijnt een hele klasse afkeuringen.
+  // De plaat deterministisch overschrijven. Het model tekent hem zelf, want
+  // plaatsing en perspectief kan het wél: het zet de plaat netjes in de
+  // houder op de bumper. Wat het niet kan is de tekst en het logo — die
+  // kwamen er verkeerd uit. Dus laten we hem de plaat plaatsen en warpen we
+  // daarna het echte asset over precies dat vlak.
+  //
+  // Andersom werkte niet: met een blanco houder herkent de detectie het vlak
+  // slecht en landde de plaat half naast de bumper in de achtergrond
+  // (gemeten op de BMW, 2026-08-03).
   if (cli.plateAfter) {
     try {
       const mountPath = path.join(CACHE_DIR, "mount-tmp.jpg");
