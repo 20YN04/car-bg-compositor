@@ -549,9 +549,34 @@ async function synthesizeAngle(
       mime: f.toLowerCase().endsWith(".png") ? "image/png" : "image/jpeg",
     });
   }
+  // Spec-bestand per auto: in/<map>/vehicle.txt. Eén keer vastleggen wat de
+  // uitvoering is en het staat er voorgoed — geen vlag meer typen, en geen
+  // AI die badgeniveau-uitvoeringen zit te raden. Een optionele eerste regel
+  // "wielbasis: 4.11" vult het cijfer voor de geometriepoort in, dat anders
+  // uit een zuiver zijaanzicht gemeten moet worden.
+  let bestandSpec: string | null = null;
+  let bestandWielbasis: number | null = null;
+  const specPad = path.join(IN_DIR, dir, "vehicle.txt");
+  if (existsSync(specPad)) {
+    const regels = (await readFile(specPad, "utf8")).split("\n");
+    const rest: string[] = [];
+    for (const r of regels) {
+      const m = r.match(/^\s*wielbasis\s*:\s*([0-9.]+)\s*$/i);
+      if (m) {
+        const n = Number(m[1]);
+        if (Number.isFinite(n)) bestandWielbasis = n;
+      } else {
+        rest.push(r);
+      }
+    }
+    const tekst = rest.join("\n").trim();
+    if (tekst) bestandSpec = tekst;
+  }
+
   const identity = await identifyVehicle(refs, cfg.GEMINI, CACHE_DIR, cli.useCache);
-  const spec = cli.vehicle ?? identity.spec;
-  if (cli.vehicle) console.log(`  voertuig (opgegeven): ${spec}`);
+  const spec = cli.vehicle ?? bestandSpec ?? identity.spec;
+  if (cli.vehicle) console.log(`  voertuig (vlag): ${spec.slice(0, 90)}…`);
+  else if (bestandSpec) console.log(`  voertuig (${specPad}): ${spec.slice(0, 90)}…`);
   const fillPct = targetFrameFill(identity.lengthM);
   console.log(
     `  voertuig: ${spec}\n  lengte ~${identity.lengthM.toFixed(2)} m → kadervulling ~${Math.round(fillPct * 100)}%`,
@@ -656,8 +681,11 @@ async function synthesizeAngle(
     }
   }
   if (sideRatio !== null && sideRatio < 3.3) sideRatio = null;
-  if (cli.wheelbaseRatio !== undefined && Number.isFinite(cli.wheelbaseRatio)) {
-    sideRatio = cli.wheelbaseRatio;
+  const opgegevenWielbasis = cli.wheelbaseRatio !== undefined && Number.isFinite(cli.wheelbaseRatio)
+    ? cli.wheelbaseRatio
+    : bestandWielbasis;
+  if (opgegevenWielbasis !== null && opgegevenWielbasis !== undefined) {
+    sideRatio = opgegevenWielbasis;
     console.log(
       `  wielbasis/wieldiameter uit specs: ${sideRatio.toFixed(2)} — ` +
         "geometriepoort actief zonder zijaanzicht in de bronset",
@@ -866,7 +894,20 @@ async function synthesizeAngle(
         };
       }
     }
-    if (acceptable && qual.qualityOk && verdict.issues.length === 0) break;
+    // Stoppen zodra het goed genoeg is. De lus brak alleen af bij een
+    // volmaakt schone kandidaat, dus na een geaccepteerde poging 1 draaide
+    // hij er nog vijf die niets beters opleverden — puur verlies (gemeten op
+    // de BMW, 2026-08-03). Nu is een handvol kleine opmerkingen genoeg reden
+    // om te publiceren; de harde poorten zijn dan toch al door.
+    if (acceptable && qual.qualityOk && verdict.issues.length <= cfg.SYNTH.goedGenoegAfwijkingen) {
+      if (verdict.issues.length > 0) {
+        console.log(
+          `  goed genoeg na poging ${attempt + 1}: ${verdict.issues.length} kleine ` +
+            "afwijking(en), geen reden om door te zoeken",
+        );
+      }
+      break;
+    }
     console.warn(
       `  ⚠ synth-poging ${attempt + 1} ` +
         (verdict.sameVehicle

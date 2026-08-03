@@ -56,6 +56,12 @@ export interface SynthConfig {
   seed: number;
   maxAttempts: number;
   /**
+   * Aantal kleine afwijkingen waarbij de lus stopt in plaats van door te
+   * zoeken naar een volmaakte kandidaat. De harde poorten zijn dan al door;
+   * doorgaan kost generaties en levert zelden iets beters op.
+   */
+  goedGenoegAfwijkingen: number;
+  /**
    * Deterministische lakcontrole: de gemiddelde lak van de kandidaat (via
    * de matte) moet binnen deze band van de bron-mediaan blijven. De
    * VLM-inspectie alleen bleek te vergeeflijk — zilver dat wit rendert kwam
@@ -140,6 +146,7 @@ export const defaultConfig: Config = {
     // 6 sinds de geometrie- en decorpoorten: die verbruiken samen geregeld
     // drie pogingen voordat de inhoudelijke poorten aan bod komen
     maxAttempts: 6,
+    goedGenoegAfwijkingen: 2,
     minLumaRatio: 0.85,
     maxLumaRatio: 1.15,
     maxTintDelta: 0.05,
