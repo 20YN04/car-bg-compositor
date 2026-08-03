@@ -619,6 +619,7 @@ async function synthesizeAngle(
   }
 
   let best: { img: Buffer; issues: string[] } | null = null;
+  let fallback: { img: Buffer; issues: string[] } | null = null;
   let feedback: string[] = [];
   for (let attempt = 0; attempt < cfg.SYNTH.maxAttempts; attempt++) {
     let img = await generateNovelView(
@@ -786,13 +787,27 @@ async function synthesizeAngle(
       ...plate.issues.map((i) => `licence plate: ${i}`),
       ...qual.issues.map((i) => `image quality: ${i}`),
     ];
+    // De kwaliteitspoort telt bewust NIET mee in `acceptable`. Die geeft
+    // geregeld smaakoordelen ("iets minder scherp", "reflecties wat vlakker")
+    // en die blokkeerden een kandidaat even hard als een verkeerde auto —
+    // waarna de hoek helemaal niets opleverde. Een wat zachter beeld is beter
+    // dan géén beeld, dus kwaliteit degradeert naar tweede keus. Overgenomen
+    // uit car-multiview (2026-08-02).
     const acceptable =
       verdict.sameVehicle && verdict.paintMatch && paintIssue === null &&
-      !prop.distorted && plate.plateOk && qual.qualityOk;
-    if (acceptable && (best === null || verdict.issues.length < best.issues.length)) {
-      best = { img, issues: verdict.issues };
+      !prop.distorted && plate.plateOk;
+    if (acceptable) {
+      const cand = { img, issues: verdict.issues };
+      if (qual.qualityOk) {
+        if (best === null || verdict.issues.length < best.issues.length) best = cand;
+      } else if (fallback === null || verdict.issues.length < fallback.issues.length) {
+        fallback = {
+          ...cand,
+          issues: [...cand.issues, ...qual.issues.map((i) => `beeldkwaliteit: ${i}`)],
+        };
+      }
     }
-    if (acceptable && verdict.issues.length === 0) break;
+    if (acceptable && qual.qualityOk && verdict.issues.length === 0) break;
     console.warn(
       `  ⚠ synth-poging ${attempt + 1} ` +
         (verdict.sameVehicle
@@ -809,6 +824,13 @@ async function synthesizeAngle(
         `: ${allIssues.join("; ") || "(geen detail opgegeven)"}`,
     );
     if (allIssues.length > 0) feedback = allIssues;
+  }
+  if (!best && fallback) {
+    console.warn(
+      "  ⚠ geen kandidaat die ook de kwaliteitspoort haalt — beste " +
+        `inhoudelijk correcte beeld gepubliceerd: ${fallback.issues.join("; ")}`,
+    );
+    best = fallback;
   }
   if (!best) {
     throw new Error(

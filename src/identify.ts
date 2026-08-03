@@ -269,6 +269,11 @@ export async function checkQuality(
     "vehicle, not the composition. It must match the reference standard: " +
     "tack-sharp panel lines and badges, clean realistic reflections, " +
     "believable materials, no blur, no noise, no compression artifacts, no " +
+    "The candidate intentionally carries a Carredo dealer plate in the " +
+    "car's own plate position: a white plate with a blue wing mark, the " +
+    "blue 'Carredo' logotype and a green-to-blue strip. That plate belongs " +
+    "there and is checked elsewhere — never report it as a watermark, a " +
+    "sticker, an extraneous element or a rendering fault.\n" +
     "soft plasticky toy-like or over-smoothed rendering, no watermark " +
     "remnants. Low-quality source photos are never an excuse — the output " +
     "must look like it was shot in the reference's studio with the " +
