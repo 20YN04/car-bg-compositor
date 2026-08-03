@@ -39,6 +39,38 @@ function toImageInput(p: ImagePart): { type: string; mime_type: string; data: st
 }
 
 /**
+ * Is dit een hik of een echt bezwaar? Tijdelijke fouten verdienen een
+ * herkansing, een afgewezen prompt of een dood quotum niet.
+ *
+ * Waarom dit bestaat. In car-multiview gingen op de VW ID.3 twee van de drie
+ * hoeken verloren aan zo'n hik — een leeg antwoord en een "fetch failed" —
+ * na 138 betaalde calls, terwijl er inhoudelijk niets mis was (2026-08-03).
+ */
+function tijdelijkeFout(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return /fetch failed|geen tekst terug|geen beeld terug|ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up|network|timeout|429|500|502|503|504|overloaded|unavailable|internal error/i
+    .test(msg);
+}
+
+/** Voert `fn` uit en herkanst alleen bij een tijdelijke fout, met oplopende pauze. */
+async function metHerkansing<T>(wat: string, fn: () => Promise<T>): Promise<T> {
+  const pauzes = [2000, 6000, 15000];
+  for (let poging = 0; ; poging++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (poging >= pauzes.length || !tijdelijkeFout(err)) throw err;
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(
+        `  ⚠ ${wat}: tijdelijke fout (${msg.slice(0, 70)}) — ` +
+          `herkansing ${poging + 1}/${pauzes.length} over ${pauzes[poging]! / 1000}s`,
+      );
+      await new Promise((r) => setTimeout(r, pauzes[poging]!));
+    }
+  }
+}
+
+/**
  * Tekstantwoord van Gemini over één of meer beelden (identificatie,
  * vergelijking, proportie-oordeel). Gecachet op sha256 van prompt + beelden.
  */
@@ -64,23 +96,25 @@ export async function geminiText(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const interactions: any = (client as GoogleGenAI & { interactions: unknown }).interactions;
   const input = [{ type: "text", text: prompt }, ...images.map(toImageInput)];
-  let interaction: { output_text?: unknown };
-  try {
-    interaction = await interactions.create({ model, input });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    if (model === cfg.modelId || !/not found|unsupported|invalid|404/i.test(msg)) throw err;
-    console.warn(`  ⚠ tekstmodel "${model}" niet bruikbaar — teruggevallen op ${cfg.modelId}`);
-    interaction = await interactions.create({ model: cfg.modelId, input });
-  }
-  geminiStats.calls++;
-
-  const text = interaction.output_text;
-  if (typeof text !== "string" || text.length === 0) {
-    throw new Error(
-      `Gemini gaf geen tekst terug: ${JSON.stringify(interaction).slice(0, 300)}`,
-    );
-  }
+  const text = await metHerkansing("tekstoordeel", async () => {
+    let interaction: { output_text?: unknown };
+    try {
+      interaction = await interactions.create({ model, input });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (model === cfg.modelId || !/not found|unsupported|invalid|404/i.test(msg)) throw err;
+      console.warn(`  ⚠ tekstmodel "${model}" niet bruikbaar — teruggevallen op ${cfg.modelId}`);
+      interaction = await interactions.create({ model: cfg.modelId, input });
+    }
+    geminiStats.calls++;
+    const t = interaction.output_text;
+    if (typeof t !== "string" || t.length === 0) {
+      throw new Error(
+        `Gemini gaf geen tekst terug: ${JSON.stringify(interaction).slice(0, 300)}`,
+      );
+    }
+    return t;
+  });
   await writeFile(cachePath, JSON.stringify({ text }));
   return text;
 }
@@ -115,26 +149,27 @@ export async function generateNovelView(
   const client = getClient();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const interactions: any = (client as GoogleGenAI & { interactions: unknown }).interactions;
-  const interaction = await interactions.create({
-    model: cfg.modelId,
-    input: [{ type: "text", text: prompt }, ...refs.map(toImageInput)],
-    response_format: {
-      type: "image",
-      mime_type: "image/jpeg",
-      aspect_ratio: cfg.aspectRatio,
-      image_size: cfg.imageSize,
-    },
-    generation_config: { seed },
+  const img = await metHerkansing("beeldgeneratie", async () => {
+    const interaction = await interactions.create({
+      model: cfg.modelId,
+      input: [{ type: "text", text: prompt }, ...refs.map(toImageInput)],
+      response_format: {
+        type: "image",
+        mime_type: "image/jpeg",
+        aspect_ratio: cfg.aspectRatio,
+        image_size: cfg.imageSize,
+      },
+      generation_config: { seed },
+    });
+    geminiStats.calls++;
+    const out = interaction.output_image;
+    if (!out?.data) {
+      throw new Error(
+        `Gemini gaf geen beeld terug: ${JSON.stringify(interaction).slice(0, 300)}`,
+      );
+    }
+    return Buffer.from(out.data, "base64");
   });
-  geminiStats.calls++;
-
-  const out = interaction.output_image;
-  if (!out?.data) {
-    throw new Error(
-      `Gemini gaf geen beeld terug: ${JSON.stringify(interaction).slice(0, 300)}`,
-    );
-  }
-  const img = Buffer.from(out.data, "base64");
   await writeFile(cachePath, img);
   return img;
 }
