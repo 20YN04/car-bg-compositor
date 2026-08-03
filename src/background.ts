@@ -1,5 +1,33 @@
 import sharp from "sharp";
 
+export interface CarBox {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+/** Volledige bbox van de auto in een cutout, in pixels. */
+export async function carBox(cutout: Buffer): Promise<CarBox | null> {
+  const { data, info } = await sharp(cutout)
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  let left = info.width, right = -1, top = info.height, bottom = -1;
+  for (let y = 0; y < info.height; y++) {
+    for (let x = 0; x < info.width; x++) {
+      if ((data[(y * info.width + x) * 4 + 3] ?? 0) > 10) {
+        if (x < left) left = x;
+        if (x > right) right = x;
+        if (y < top) top = y;
+        if (y > bottom) bottom = y;
+      }
+    }
+  }
+  if (right < 0 || bottom < 0) return null;
+  return { left, top, width: right - left + 1, height: bottom - top + 1 };
+}
+
 /** Kadervulling (bbox-breedte / beeldbreedte) van een cutout. */
 export async function measureFill(cutout: Buffer): Promise<number> {
   const { data, info } = await sharp(cutout)

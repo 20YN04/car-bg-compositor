@@ -17,7 +17,7 @@ import {
 } from "./identify.js";
 import { getCutout, maskStats, noteFalFailure } from "./mask.js";
 import { cutoutMeans, medianMeans, type ChannelMeans } from "./measure.js";
-import { measureFill, normalizeScale, replaceBackground } from "./background.js";
+import { carBox, measureFill, normalizeScale, replaceBackground } from "./background.js";
 import { checkGeometry, wheelbaseRatio } from "./geometry.js";
 import { florenceBoxes, mountPlate, tightPlateBox } from "./plate.js";
 
@@ -264,6 +264,59 @@ function targetFrameFill(lengthM: number): number {
 }
 
 /**
+ * De auto zelf, uitgesneden en uitvergroot uit de bronfoto's.
+ *
+ * Dezelfde ingreep als de velg-close-up, maar dan voor de koets. Een
+ * telefoonfoto is staand met veel omgeving eromheen; de auto beslaat er soms
+ * maar een derde van. Het model leest de verhoudingen dan slecht af en valt
+ * terug op zijn standaardbeeld — bij de BMW i5 Touring leverde dat elf keer
+ * op rij een compacte X1 op, ook met de afmetingen letterlijk in de spec
+ * (2026-08-03). Tekst wint het niet van wat het model ziet; uitvergroten wel.
+ * We kiezen de foto waarop de auto het breedst in beeld staat, want daar is
+ * de lengte het best af te lezen.
+ */
+async function bodyCloseUp(
+  refFiles: string[],
+  cfg: Config,
+  useCache: boolean,
+): Promise<ImagePart | null> {
+  let best: { part: ImagePart; width: number; note: string } | null = null;
+  for (const f of refFiles) {
+    try {
+      const file = path.join(IN_DIR, f);
+      const cutout = await getCutout(file, CACHE_DIR, cfg.FAL, cfg.MATTE, useCache);
+      const box = await carBox(cutout);
+      if (!box) continue;
+      const src = await readFile(file);
+      const meta = await sharp(src).metadata();
+      const w = meta.width ?? 0, h = meta.height ?? 0;
+      if (!w || !h || box.width < w * 0.25) continue;
+      if (best && box.width <= best.width) continue;
+      const pad = Math.round(box.width * 0.04);
+      const left = Math.max(0, box.left - pad);
+      const top = Math.max(0, box.top - pad);
+      const width = Math.min(w - left, box.width + pad * 2);
+      const height = Math.min(h - top, box.height + pad * 2);
+      best = {
+        width: box.width,
+        note: `${f}, ${width}x${height}px (auto besloeg ${Math.round((box.width / w) * 100)}% van de breedte)`,
+        part: {
+          data: await sharp(src)
+            .extract({ left, top, width, height })
+            .resize({ width: 1600, withoutEnlargement: false })
+            .jpeg({ quality: 95 })
+            .toBuffer(),
+        },
+      };
+    } catch (err) {
+      noteFalFailure(err);
+    }
+  }
+  if (best) console.log(`  koetsreferentie: ${best.note}`);
+  return best?.part ?? null;
+}
+
+/**
  * Uitvergrote close-up van het beste wiel uit de bronfoto's, als extra
  * referentie voor de generatie. Het model kopieert een velg niet, het verzint
  * er een plausibele bij; in een volledige foto is de velg te klein om af te
@@ -338,6 +391,7 @@ function synthPrompt(
   hasAnchor: boolean,
   hasPlate: boolean,
   hasWheelRef: boolean,
+  hasBodyRef: boolean,
   fillPct: number,
 ): string {
   let p = `Create a professional catalogue photo of this exact vehicle: ${spec}.\n`;
@@ -384,6 +438,14 @@ function synthPrompt(
     "the source photo quality — reconstruct crisp panel lines, badges and " +
     "reflections cleanly; never reproduce blur, noise, compression " +
     "artifacts or watermarks from the source photos.\n" +
+    (hasBodyRef
+      ? "PROPORTIONS: one of the attached images is the same car CROPPED " +
+        "TIGHT, so its body fills the frame. Read the proportions from that " +
+        "image: the length of the bonnet, the length of the wheelbase, how " +
+        "low the roof sits relative to the body, and the overhangs. Those " +
+        "proportions are binding — never render a shorter, taller or more " +
+        "compact car than the one in that crop.\n"
+      : "") +
     (hasWheelRef
       ? "WHEELS: one of the attached images is a CLOSE-UP of this car's " +
         "actual wheel. Copy that wheel exactly: the number of spokes, their " +
@@ -517,6 +579,8 @@ async function synthesizeAngle(
     );
   }
 
+  const bodyRef = await bodyCloseUp(refFiles, cfg, cli.useCache);
+  if (bodyRef) genRefs = [...genRefs, bodyRef];
   const wheelRef = await wheelCloseUp(refs, cfg, cli.useCache);
   if (!wheelRef) {
     console.log("  ⚠ geen bruikbaar wiel in de bronfoto's — geen velgreferentie");
@@ -559,7 +623,10 @@ async function synthesizeAngle(
   for (let attempt = 0; attempt < cfg.SYNTH.maxAttempts; attempt++) {
     let img = await generateNovelView(
       genRefs,
-      synthPrompt(spec, feedback, hasAnchor, plateAsset !== null, wheelRef !== null, fillPct),
+      synthPrompt(
+        spec, feedback, hasAnchor, plateAsset !== null, wheelRef !== null,
+        bodyRef !== null, fillPct,
+      ),
       cfg.GEMINI, CACHE_DIR, cli.useCache, cfg.SYNTH.seed + attempt,
     );
     // harde dimensiepoort vóór de (betaalde) inspectie: het model rendert
