@@ -62,6 +62,17 @@ export interface SynthConfig {
    */
   goedGenoegAfwijkingen: number;
   /**
+   * Na hoeveel keer dat ALLEEN de kwaliteitspoort nog blokkeert we stoppen.
+   * Die poort vergelijkt met het anker — een zwarte AMG — en vindt een witte
+   * hatchback stelselmatig 'minder scherp en minder premium'. Op de VW ID.3
+   * sneuvelden zo zes van de zes pogingen op woordelijk dezelfde klacht,
+   * terwijl de auto zelf al vanaf poging 1 klopte (2026-08-03). De klacht is
+   * bovendien onuitvoerbaar: 'wees scherper' stuurt de volgende generatie
+   * niet. Twee keer dezelfde uitkomst is genoeg bewijs dat doorzoeken niets
+   * oplevert.
+   */
+  kwaliteitHerhaling: number;
+  /**
    * Deterministische lakcontrole: de gemiddelde lak van de kandidaat (via
    * de matte) moet binnen deze band van de bron-mediaan blijven. De
    * VLM-inspectie alleen bleek te vergeeflijk — zilver dat wit rendert kwam
@@ -147,6 +158,7 @@ export const defaultConfig: Config = {
     // drie pogingen voordat de inhoudelijke poorten aan bod komen
     maxAttempts: 6,
     goedGenoegAfwijkingen: 2,
+    kwaliteitHerhaling: 2,
     minLumaRatio: 0.85,
     maxLumaRatio: 1.15,
     maxTintDelta: 0.05,

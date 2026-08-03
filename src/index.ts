@@ -708,6 +708,7 @@ async function synthesizeAngle(
 
   let best: { img: Buffer; issues: string[] } | null = null;
   let fallback: { img: Buffer; issues: string[] } | null = null;
+  let kwaliteitAlleen = 0;
   let feedback: string[] = [];
   // De vorige poging als vertrekpunt. Bij een afkeuring is de rest van dat
   // beeld meestal wél goed — de auto, de hoek, het licht, het decor. Alles
@@ -910,6 +911,19 @@ async function synthesizeAngle(
     // hij er nog vijf die niets beters opleverden — puur verlies (gemeten op
     // de BMW, 2026-08-03). Nu is een handvol kleine opmerkingen genoeg reden
     // om te publiceren; de harde poorten zijn dan toch al door.
+    // De kwaliteitspoort blokkeert, maar de auto klopt. Die poort meet tegen
+    // het anker en vindt een witte hatchback altijd minder rijk dan een zwarte
+    // AMG; herhaalt hij zich, dan levert doorzoeken aantoonbaar niets op.
+    if (acceptable && !qual.qualityOk) {
+      kwaliteitAlleen++;
+      if (kwaliteitAlleen >= cfg.SYNTH.kwaliteitHerhaling) {
+        console.log(
+          `  gestopt na poging ${attempt + 1}: alleen de kwaliteitspoort ` +
+            `blokkeert nog, ${kwaliteitAlleen} keer op rij — de auto zelf klopt`,
+        );
+        break;
+      }
+    }
     if (acceptable && qual.qualityOk && verdict.issues.length <= cfg.SYNTH.goedGenoegAfwijkingen) {
       if (verdict.issues.length > 0) {
         console.log(
