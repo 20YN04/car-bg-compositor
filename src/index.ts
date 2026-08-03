@@ -684,11 +684,22 @@ async function synthesizeAngle(
   const opgegevenWielbasis = cli.wheelbaseRatio !== undefined && Number.isFinite(cli.wheelbaseRatio)
     ? cli.wheelbaseRatio
     : bestandWielbasis;
-  if (opgegevenWielbasis !== null && opgegevenWielbasis !== undefined) {
+  // De vlag overschrijft altijd — dat is expliciete invoer. Het getal uit
+  // vehicle.txt vult alleen aan: staat er een zuiver zijaanzicht in de set,
+  // dan gaan kandidaat en bron langs dezelfde meetlat en valt de systematische
+  // fout weg, terwijl een getypt getal zijn eigen afrondingsfout meebrengt.
+  const uitVlag = cli.wheelbaseRatio !== undefined && Number.isFinite(cli.wheelbaseRatio);
+  if (opgegevenWielbasis !== null && opgegevenWielbasis !== undefined &&
+      (uitVlag || sideRatio === null)) {
     sideRatio = opgegevenWielbasis;
     console.log(
       `  wielbasis/wieldiameter uit specs: ${sideRatio.toFixed(2)} — ` +
         "geometriepoort actief zonder zijaanzicht in de bronset",
+    );
+  } else if (sideRatio !== null && opgegevenWielbasis !== null && opgegevenWielbasis !== undefined) {
+    console.log(
+      `  wielbasis gemeten op het zijaanzicht: ${sideRatio.toFixed(2)} ` +
+        `(vehicle.txt zei ${opgegevenWielbasis.toFixed(2)}; de meting wint)`,
     );
   }
   if (sideRatio === null) {
