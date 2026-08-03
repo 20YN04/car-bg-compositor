@@ -250,6 +250,20 @@ function targetFrameFill(lengthM: number): number {
   return Math.min(0.88, Math.max(0.45, 0.884 * (lengthM / 4.95)));
 }
 
+/** Sterkte van de kleurzweem over een heel beeld: 0 is neutraal. */
+async function sceneCast(filePath: string): Promise<number> {
+  const stats = await sharp(filePath).stats();
+  const r = stats.channels[0]?.mean ?? 128;
+  const g = stats.channels[1]?.mean ?? 128;
+  const b = stats.channels[2]?.mean ?? 128;
+  const luma = (r + g + b) / 3;
+  return Math.max(
+    Math.abs(r / luma - 1),
+    Math.abs(g / luma - 1),
+    Math.abs(b / luma - 1),
+  );
+}
+
 function synthPrompt(
   spec: string,
   feedback: string[],
@@ -397,6 +411,28 @@ async function synthesizeAngle(
       noteFalFailure(err);
     }
   }
+  // Kleurzweem van de bronset. Is die sterk — avondzon, kunstlicht, een
+  // gekleurde muur — dan is de gemeten bronkleur vervuild en zegt een
+  // tintvergelijking niets. We dwingen de tint dan niet af en corrigeren
+  // alleen de lichtheid; de neutraal-daglicht-inspectie bewaakt de kleur.
+  // Overgenomen uit car-multiview (2026-08-01), waar dit dezelfde BMW
+  // redde: die foto's zijn in avondlicht genomen.
+  let castSum = 0, castN = 0;
+  for (const f of refFiles) {
+    try {
+      castSum += await sceneCast(path.join(IN_DIR, f));
+      castN++;
+    } catch {
+      // onleesbaar beeld telt niet mee
+    }
+  }
+  const tintReliable = castN === 0 ? true : castSum / castN <= 0.05;
+  if (!tintReliable) {
+    console.warn(
+      `  ⚠ bronset heeft een sterke kleurcast (gem. ${(castSum / castN).toFixed(3)}) — ` +
+        "tint wordt niet deterministisch afgedwongen, alleen lichtheid",
+    );
+  }
   const srcMedian = srcMeans.length > 0 ? medianMeans(srcMeans) : null;
   if (!srcMedian) {
     console.warn(
@@ -520,7 +556,7 @@ async function synthesizeAngle(
     let paintIssue: string | null = null;
     if (srcMedian) {
       const cand = await paintMeansOf(candPath, cfg, cli.useCache);
-      paintIssue = paintDeviation(cand, srcMedian, cfg.SYNTH);
+      paintIssue = paintDeviation(cand, srcMedian, cfg.SYNTH, tintReliable);
       // corrigeren i.p.v. afkeuren: een tintverschuiving is met per-kanaal
       // curves exact te repareren, ontbrekende metallic-flake of een andere
       // kleurfamilie niet. De correctie wordt altijd nagemeten. Vond de VLM
@@ -533,7 +569,7 @@ async function synthesizeAngle(
         paintIssue && verdict.sameVehicle &&
         verdict.issues.length === 0 && !prop.distorted
       ) {
-        const gains = paintCorrectionGains(cand, srcMedian);
+        const gains = paintCorrectionGains(cand, srcMedian, 1.45, !tintReliable);
         // de plaat uit de correctie houden: zonder exclusie kreeg de witte
         // Carredo-plaat de donker-gains van de koets mee. Strak op
         // plaatmaat via het SAM2-vlak — een ruime box liet een rechthoek
@@ -550,7 +586,7 @@ async function synthesizeAngle(
         );
         await writeFile(corrPath, corrected);
         const remeasured = await paintMeansOf(corrPath, cfg, cli.useCache);
-        const residual = paintDeviation(remeasured, srcMedian, cfg.SYNTH);
+        const residual = paintDeviation(remeasured, srcMedian, cfg.SYNTH, tintReliable);
         if (residual === null) {
           const approved = verdict.paintMatch
             ? true

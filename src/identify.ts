@@ -308,9 +308,15 @@ export function paintCorrectionGains(
   candidate: ChannelMeans,
   reference: ChannelMeans,
   cap = 1.45,
+  lumaOnly = false,
 ): [number, number, number] {
   const g = (c: number, r: number) =>
     Math.min(cap, Math.max(1 / cap, r / Math.max(1e-6, c)));
+  if (lumaOnly) {
+    const l = (m: ChannelMeans) => 0.2126 * m.r + 0.7152 * m.g + 0.0722 * m.b;
+    const k = g(l(candidate), l(reference));
+    return [k, k, k];
+  }
   return [
     g(candidate.r, reference.r),
     g(candidate.g, reference.g),
@@ -322,6 +328,7 @@ export function paintDeviation(
   candidate: ChannelMeans,
   reference: ChannelMeans,
   cfg: SynthConfig,
+  checkTint = true,
 ): string | null {
   const ratio = luma(candidate) / Math.max(1e-6, luma(reference));
   const dRG = Math.abs(candidate.r / candidate.g - reference.r / reference.g);
@@ -335,7 +342,7 @@ export function paintDeviation(
         "tone of the source photos",
     );
   }
-  if (dRG > cfg.maxTintDelta || dBG > cfg.maxTintDelta) {
+  if (checkTint && (dRG > cfg.maxTintDelta || dBG > cfg.maxTintDelta)) {
     parts.push(
       `the paint tint drifts from the source paint (Δr/g ${dRG.toFixed(3)}, ` +
         `Δb/g ${dBG.toFixed(3)}, allowed ${cfg.maxTintDelta}) — keep the ` +
