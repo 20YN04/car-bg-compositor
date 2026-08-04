@@ -1,3 +1,4 @@
+import "dotenv/config";
 /**
  * HTTP-koppelvlak voor Carredo, in het dialect dat hun Next-app al spreekt.
  *

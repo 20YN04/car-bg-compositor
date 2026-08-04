@@ -16,10 +16,17 @@ export const geminiStats: GeminiStats = {
 };
 
 function getClient(): GoogleGenAI {
-  const apiKey = process.env["GEMINI_NANO_BANANA_API_KEY"];
+  // Drie namen, in volgorde: onze historische, de generieke, en Carredo's
+  // IMAGE_-prefix (pydantic ImageProviderConfig) — zodat de service in hun
+  // omgeving draait zonder dat ops een secret hoeft te hernoemen.
+  const apiKey =
+    process.env["GEMINI_NANO_BANANA_API_KEY"] ??
+    process.env["GEMINI_API_KEY"] ??
+    process.env["IMAGE_GEMINI_API_KEY"];
   if (!apiKey) {
     throw new Error(
-      "GEMINI_NANO_BANANA_API_KEY ontbreekt — zet 'm in .env",
+      "Gemini-sleutel ontbreekt — zet GEMINI_NANO_BANANA_API_KEY, " +
+        "GEMINI_API_KEY of IMAGE_GEMINI_API_KEY in .env",
     );
   }
   return new GoogleGenAI({ apiKey });
