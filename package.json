@@ -6,7 +6,8 @@
   "scripts": {
     "start": "tsx src/index.ts",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "serve": "tsx src/server.ts"
   },
   "dependencies": {
     "@fal-ai/client": "^1.6.2",
