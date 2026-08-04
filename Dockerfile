@@ -8,8 +8,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends libvips42 \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-COPY package.json package-lock.json ./
-RUN npm ci --omit=dev && npm i -D tsx typescript
+# de repo gebruikt pnpm (lockfileVersion 9); npm ci kan daar niets mee
+COPY package.json pnpm-lock.yaml ./
+RUN npm i -g pnpm@9 && pnpm install --frozen-lockfile
 COPY src ./src
 COPY assets ./assets
 
@@ -19,4 +20,4 @@ VOLUME ["/app/in", "/app/out", "/app/cache"]
 
 ENV PORT=8801
 EXPOSE 8801
-CMD ["npx", "tsx", "src/server.ts"]
+CMD ["pnpm", "exec", "tsx", "src/server.ts"]
