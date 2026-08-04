@@ -40,6 +40,8 @@ export interface VehicleData {
   badges?: { text: string; where: string }[];
   /** Wielbasis in meters — activeert de geometriepoort zonder zijaanzicht. */
   wheelbaseM?: number;
+  /** Banddiameter in meters; standaard 0.715 (gangbare personenwagen). */
+  tyreDiameterM?: number;
   /** Lengte in meters — stuurt de kadervulling. */
   lengthM?: number;
   /** Vrije, door een mens geschreven aanvulling (bv. dakkleur, folie). */
@@ -50,7 +52,14 @@ export interface VehicleData {
 export function bouwSpec(v: VehicleData): string {
   const regels: string[] = [];
   if (typeof v.wheelbaseM === "number" && Number.isFinite(v.wheelbaseM)) {
-    regels.push(`wielbasis: ${v.wheelbaseM.toFixed(2)}`);
+    // De wielbasis-regel in vehicle.txt is een VERHOUDING (wielbasis /
+    // wieldiameter, ~4.3 voor een sedan), geen meters: de geometriepoort
+    // meet de kandidaat in pixels en heeft alleen aan een verhouding genoeg.
+    // Meters erin zetten gaf de poort een norm van 3.12 waar 4.33 hoorde.
+    const band = typeof v.tyreDiameterM === "number" && Number.isFinite(v.tyreDiameterM)
+      ? v.tyreDiameterM
+      : 0.715;
+    regels.push(`wielbasis: ${(v.wheelbaseM / band).toFixed(2)}`);
   }
   const kop = [v.year, v.make, v.model, v.trim].filter(Boolean).join(" ");
   const lijf: string[] = [];

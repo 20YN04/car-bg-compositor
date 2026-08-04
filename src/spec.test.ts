@@ -18,7 +18,7 @@ describe("bouwSpec", () => {
       ],
       wheelbaseM: 3.12,
     });
-    expect(spec.startsWith("wielbasis: 3.12")).toBe(true);
+    expect(spec.startsWith("wielbasis: 4.36")).toBe(true);
     expect(spec).toContain("exactly these and nothing more");
     expect(spec).toContain("'4MATIC' (front door behind the wheel arch)");
   });
