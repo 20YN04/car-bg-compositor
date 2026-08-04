@@ -7,6 +7,7 @@ import sharp from "sharp";
 import { defaultConfig, type Config } from "./config.js";
 import { geminiStats, generateNovelView, type ImagePart } from "./gemini.js";
 import {
+  checkBadgeCensus,
   checkBadgesVoted,
   checkPlate,
   checkProportions,
@@ -798,7 +799,7 @@ async function synthesizeAngle(
     //   kost een mislukte modelplaat geen poging.
     // - kwaliteit: slechte bronfoto's zijn nooit een excuus voor een zachte
     //   of plastic-achtige render
-    let [verdict, prop, plate, qual, badgeVote] = await Promise.all([
+    let [verdict, prop, plate, qual, badgeVote, badgeCensus] = await Promise.all([
       compareAgainstSources(
         { data: img }, refs, spec, cfg.GEMINI, CACHE_DIR, cli.useCache,
       ),
@@ -817,6 +818,11 @@ async function synthesizeAngle(
         { data: img }, refs,
         spec.split(/[—.]/)[0]?.trim().slice(0, 90) ?? spec.slice(0, 90),
         cfg.GEMINI, CACHE_DIR, cli.useCache,
+      ),
+      // badge-telling op uitvergrote crops, getoetst aan de beschrijving:
+      // de enige schaal waarop een verdubbelde badge betrouwbaar telbaar is
+      gridCrops(img, candCutout).then((crops) =>
+        checkBadgeCensus(crops, spec, cfg.GEMINI, CACHE_DIR, cli.useCache),
       ),
     ]);
     // Scherpte wordt gemeten, niet beoordeeld: de detaildichtheid van de
@@ -936,6 +942,10 @@ async function synthesizeAngle(
         : []),
       ...plate.issues.map((i) => `licence plate: ${i}`),
       ...qual.issues.map((i) => `image quality: ${i}`),
+      ...badgeCensus.issues.map(
+        (i) => `${i} — the description lists the car's badges exhaustively; ` +
+          "render those and no others, never a second copy on a nearby panel",
+      ),
       ...badgeVote.issues.map(
         (i) => `${i} — render ONLY the badges the source photos show; when a ` +
           "badge is present but unreadable, use the factory badge for this model",
@@ -955,6 +965,7 @@ async function synthesizeAngle(
     // brede badges_match-veld bleek wisselvallig en telt als zachte melding
     const acceptable =
       verdict.sameVehicle && verdict.paintMatch && badgeVote.badgesOk &&
+      badgeCensus.badgesOk &&
       paintIssue === null && !prop.distorted && plate.plateOk;
     if (acceptable) {
       const cand = { img, issues: verdict.issues };
@@ -1039,6 +1050,34 @@ async function synthesizeAngle(
     best.img,
   );
   return { img: best.img, fillPct };
+}
+
+/**
+ * Uitvergrote rastercrops over de koets (3x2 met overlap): de schaal waarop
+ * badges van twintig pixels leesbaar worden. Zelfde recept als de
+ * plaatwerkpoort in car-multiview.
+ */
+async function gridCrops(img: Buffer, cutout: Buffer): Promise<ImagePart[]> {
+  const box = await carBox(cutout);
+  const meta = await sharp(img).metadata();
+  if (!box || !meta.width || !meta.height) return [];
+  const cols = 3, rows = 2, overlap = 0.08;
+  const crops: ImagePart[] = [];
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const tw = box.width / cols, th = box.height / rows;
+      const left = Math.max(0, Math.round(box.left + c * tw - tw * overlap));
+      const top = Math.max(0, Math.round(box.top + r * th - th * overlap));
+      const width = Math.min(meta.width - left, Math.round(tw * (1 + 2 * overlap)));
+      const height = Math.min(meta.height - top, Math.round(th * (1 + 2 * overlap)));
+      if (width < 32 || height < 32) continue;
+      crops.push({
+        data: await sharp(img).extract({ left, top, width, height })
+          .resize({ width: 1400, withoutEnlargement: false }).jpeg({ quality: 95 }).toBuffer(),
+      });
+    }
+  }
+  return crops;
 }
 
 async function main(): Promise<void> {

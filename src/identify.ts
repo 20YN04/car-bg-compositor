@@ -487,3 +487,76 @@ export async function checkBadgesVoted(
     ),
   };
 }
+
+export interface BadgeCensusVerdict {
+  badgesOk: boolean;
+  issues: string[];
+}
+
+/**
+ * Badge-telling op uitvergrote rastercrops, getoetst aan de beschrijving.
+ *
+ * Waarom. Elke vol-formaat-poort — het brede badges_match-veld én de
+ * toegewijde stempoort — miste een verdubbelde EQE-badge van twintig pixels;
+ * op een crop van 1400px breed is diezelfde dubbel onmiskenbaar. Resolutie
+ * los je niet op met meer stemmen, wel met zoom (2026-08-04).
+ *
+ * De maatstaf is hier bewust de BESCHRIJVING, niet de bronfoto's: de
+ * hiërarchie is aanwezigheid-uit-foto's, tekst-uit-fabriekskennis, en de
+ * spec is waar die twee samenkomen (Yentl, 2026-08-04). De spec somt de
+ * badges limitatief op; alles wat de crops daarbuiten tonen — verkeerde
+ * tekst, verkeerd paneel, of een tweede exemplaar waar er één hoort — is
+ * een overtreding. Twee stemmen, alleen blokkeren bij overeenstemming.
+ * Een mislukte aanroep telt als schoon.
+ */
+export async function checkBadgeCensus(
+  crops: ImagePart[],
+  spec: string,
+  cfg: GeminiConfig,
+  cacheDir: string,
+  useCache: boolean,
+): Promise<BadgeCensusVerdict> {
+  if (crops.length === 0) return { badgesOk: true, issues: [] };
+  const prompt = (pass: number): string =>
+    `The ${crops.length} images are enlarged crops of ONE generated ` +
+    "catalogue photo of a car (they overlap slightly).\n" +
+    "The car's description states exactly which badges the real car " +
+    `carries:\n---\n${spec}\n---\n` +
+    "Step 1: from the description, list the allowed badges and where they " +
+    "sit. Step 2: list EVERY badge, emblem and model lettering instance " +
+    "visible in the crops, with its panel (count an instance once even " +
+    "when overlapping crops show it twice; ignore the licence/Carredo " +
+    "plate, brand star and grille emblems, and anything behind glass). " +
+    "Step 3: report every instance the description does not allow — wrong " +
+    "text, wrong panel, or a SECOND instance on a nearby panel where the " +
+    "description allows one (a stacked duplicate is a violation).\n" +
+    `(inspection pass ${pass} — judge independently)\n` +
+    'Answer with STRICT JSON only, no code fences: {"violations": ' +
+    '[{"text": string, "where": string}]} — empty when the crops match ' +
+    "the description.";
+  const ask = async (pass: number): Promise<{ text: string; where: string }[] | null> => {
+    try {
+      const raw = await geminiText(crops, prompt(pass), cfg, cacheDir, useCache);
+      const m = raw.match(/\{[\s\S]*\}/);
+      if (!m) return null;
+      const obj = JSON.parse(m[0]) as { violations?: unknown };
+      if (!Array.isArray(obj.violations)) return [];
+      return obj.violations
+        .filter((u): u is { text?: unknown; where?: unknown } => typeof u === "object" && u !== null)
+        .map((u) => ({ text: String(u.text ?? "?"), where: String(u.where ?? "?") }));
+    } catch {
+      return null;
+    }
+  };
+  const [a, b] = await Promise.all([ask(1), ask(2)]);
+  if (a === null || b === null) return { badgesOk: true, issues: [] };
+  const inBeide = a.filter((x) =>
+    b.some((y) => y.text.toLowerCase().replace(/\s+/g, "") === x.text.toLowerCase().replace(/\s+/g, "")),
+  );
+  return {
+    badgesOk: inBeide.length === 0,
+    issues: inBeide.map(
+      (x) => `badge violates the description: "${x.text}" (${x.where})`,
+    ),
+  };
+}
