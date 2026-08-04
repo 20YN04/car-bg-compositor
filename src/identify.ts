@@ -533,9 +533,14 @@ export async function checkBadgeCensus(
     "plate, brand star and grille emblems, and anything behind glass; " +
     "ignore EVERYTHING on wheels, tyres and brake calipers — factory " +
     "caliper and rim lettering is judged by the wheel gate, not here). " +
-    "Step 3: report every instance the description does not allow — wrong " +
-    "text, wrong panel, or a SECOND instance on a nearby panel where the " +
-    "description allows one (a stacked duplicate is a violation).\n" +
+    "Step 3: report every instance the description does not allow. A " +
+    "violation is ONLY: lettering the description does not mention at all, " +
+    "lettering on a clearly DIFFERENT body panel than described, or MORE " +
+    "instances than the description allows (a stacked duplicate). NOT a " +
+    "violation: small position differences within the same area (door edge " +
+    "versus wing edge counts as the same area), finish, brightness or size " +
+    "nuances — chrome lettering photographs bright against dark paint in a " +
+    "studio, that is physics, not a wrong badge.\n" +
     `(inspection pass ${pass} — judge independently)\n` +
     'Answer with STRICT JSON only, no code fences: {"violations": ' +
     '[{"text": string, "where": string}]} — empty when the crops match ' +
