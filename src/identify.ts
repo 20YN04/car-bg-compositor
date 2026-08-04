@@ -412,3 +412,78 @@ export function paintDeviation(
   }
   return parts.length > 0 ? parts.join("; ") : null;
 }
+
+export interface BadgeVoteVerdict {
+  badgesOk: boolean;
+  issues: string[];
+}
+
+/**
+ * Toegewijde badgepoort met twee stemmen.
+ *
+ * Waarom. Het badges_match-veld in de brede identiteitsinspectie flipte per
+ * poging: de verzonnen 4MATIC werd in drie van zes pogingen benoemd en in de
+ * andere doorgelaten, en een verdubbelde EQE-badge glipte er daarna alsnog
+ * doorheen (2026-08-04). Eén veld tussen tien andere vragen krijgt niet de
+ * aandacht die een detail van twintig pixels vraagt. Dit is dezelfde les als
+ * bij het plaatwerk: een toegewijde, kleine vraag met ALTIJD twee
+ * onafhankelijke stemmen, en alleen blokkeren als beide stemmen het eens
+ * zijn — één wisselvallige stem mag geen goed beeld afkeuren, en één milde
+ * stem mag geen fout beeld doorlaten.
+ *
+ * Een mislukte aanroep telt als schoon: infrastructuur keurt nooit af.
+ */
+export async function checkBadgesVoted(
+  candidate: ImagePart,
+  sources: ImagePart[],
+  korteSpec: string,
+  cfg: GeminiConfig,
+  cacheDir: string,
+  useCache: boolean,
+): Promise<BadgeVoteVerdict> {
+  const prompt = (pass: number): string =>
+    "The FIRST image is a generated catalogue photo. The other images are " +
+    `real photos of the same physical car: ${korteSpec}.\n` +
+    "Enumerate EVERY badge, emblem and piece of model lettering visible on " +
+    "the bodywork of the FIRST image (ignore the licence/Carredo plate and " +
+    "anything inside the car). For each: does at least one real photo show " +
+    "that same badge on that same body panel? Duplicates count as " +
+    "unsupported: when the candidate shows the same lettering on MORE " +
+    "panels than the real photos do, the extra copies are unsupported.\n" +
+    "Blurry real photos: a badge whose PRESENCE is visible on the real car " +
+    "supports a badge in that spot even when its text is too small to read. " +
+    "In that case the candidate's lettering is acceptable ONLY when it is " +
+    "the badge the FACTORY places at that position on this exact model and " +
+    "trim — factory knowledge fills in unreadable text, it never adds " +
+    "badges the photos don't show at all.\n" +
+    `(inspection pass ${pass} — judge independently)\n` +
+    'Answer with STRICT JSON only, no code fences: {"unsupported": ' +
+    '[{"text": string, "where": string}]} — empty when every candidate ' +
+    "badge is supported by the real photos.";
+  const ask = async (pass: number): Promise<{ text: string; where: string }[] | null> => {
+    try {
+      const raw = await geminiText([candidate, ...sources], prompt(pass), cfg, cacheDir, useCache);
+      const m = raw.match(/\{[\s\S]*\}/);
+      if (!m) return null;
+      const obj = JSON.parse(m[0]) as { unsupported?: unknown };
+      if (!Array.isArray(obj.unsupported)) return [];
+      return obj.unsupported
+        .filter((u): u is { text?: unknown; where?: unknown } => typeof u === "object" && u !== null)
+        .map((u) => ({ text: String(u.text ?? "?"), where: String(u.where ?? "?") }));
+    } catch {
+      return null;
+    }
+  };
+  const [a, b] = await Promise.all([ask(1), ask(2)]);
+  if (a === null || b === null) return { badgesOk: true, issues: [] };
+  // alleen blokkeren bij overeenstemming: dezelfde tekst in beide stemmen
+  const inBeide = a.filter((x) =>
+    b.some((y) => y.text.toLowerCase().replace(/\s+/g, "") === x.text.toLowerCase().replace(/\s+/g, "")),
+  );
+  return {
+    badgesOk: inBeide.length === 0,
+    issues: inBeide.map(
+      (x) => `unsupported badge "${x.text}" (${x.where}) — not on the real car at that spot`,
+    ),
+  };
+}

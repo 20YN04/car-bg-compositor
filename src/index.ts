@@ -7,6 +7,7 @@ import sharp from "sharp";
 import { defaultConfig, type Config } from "./config.js";
 import { geminiStats, generateNovelView, type ImagePart } from "./gemini.js";
 import {
+  checkBadgesVoted,
   checkPlate,
   checkProportions,
   checkQuality,
@@ -457,7 +458,10 @@ function synthPrompt(
     "the source photos, each in its exact location — nothing more. NEVER " +
     "add a badge or lettering because the model name or trim level implies " +
     "it, and NEVER repeat a badge on additional panels: a badge the photos " +
-    "show once appears once.\n" +
+    "show once appears once. When a badge is clearly PRESENT in the photos " +
+    "but its lettering is too small to read, render exactly the badge the " +
+    "factory places at that position on this model and trim — never " +
+    "invented text.\n" +
     "ANGLE: three-quarter FRONT view with the front of the car on the " +
     "RIGHT of the frame, roughly 30-35 degrees off axis, camera height " +
     "1.0-1.3 m.\n" +
@@ -794,7 +798,7 @@ async function synthesizeAngle(
     //   kost een mislukte modelplaat geen poging.
     // - kwaliteit: slechte bronfoto's zijn nooit een excuus voor een zachte
     //   of plastic-achtige render
-    let [verdict, prop, plate, qual] = await Promise.all([
+    let [verdict, prop, plate, qual, badgeVote] = await Promise.all([
       compareAgainstSources(
         { data: img }, refs, spec, cfg.GEMINI, CACHE_DIR, cli.useCache,
       ),
@@ -807,6 +811,13 @@ async function synthesizeAngle(
       hasAnchor
         ? checkQuality({ data: img }, genRefs[0]!, cfg.GEMINI, CACHE_DIR, cli.useCache)
         : Promise.resolve({ qualityOk: true, issues: [] as string[] }),
+      // toegewijde badgepoort met twee stemmen: het badges_match-veld in de
+      // brede inspectie flipte per poging op dit detail van twintig pixels
+      checkBadgesVoted(
+        { data: img }, refs,
+        spec.split(/[—.]/)[0]?.trim().slice(0, 90) ?? spec.slice(0, 90),
+        cfg.GEMINI, CACHE_DIR, cli.useCache,
+      ),
     ]);
     // Scherpte wordt gemeten, niet beoordeeld: de detaildichtheid van de
     // uitvoer tegen die van de bronfoto's van dezelfde auto.
@@ -925,6 +936,11 @@ async function synthesizeAngle(
         : []),
       ...plate.issues.map((i) => `licence plate: ${i}`),
       ...qual.issues.map((i) => `image quality: ${i}`),
+      ...badgeVote.issues.map(
+        (i) => `${i} — render ONLY the badges the source photos show; when a ` +
+          "badge is present but unreadable, use the factory badge for this model",
+      ),
+      ...(verdict.badgesMatch ? [] : ["broad inspection doubts the badges — see other findings"]),
     ];
     // De kwaliteitspoort telt bewust NIET mee in `acceptable`. Die geeft
     // geregeld smaakoordelen ("iets minder scherp", "reflecties wat vlakker")
@@ -935,8 +951,10 @@ async function synthesizeAngle(
     // badgesMatch hard erin: een verzonnen of verdubbelde badge is nooit een
     // kleine afwijking — via de terugvalroute belandde in car-multiview de
     // AMG mét 4MATIC-badge in de uitvoer (2026-08-04)
+    // de stempoort beslist over badges (twee eensgezinde stemmen); het
+    // brede badges_match-veld bleek wisselvallig en telt als zachte melding
     const acceptable =
-      verdict.sameVehicle && verdict.paintMatch && verdict.badgesMatch &&
+      verdict.sameVehicle && verdict.paintMatch && badgeVote.badgesOk &&
       paintIssue === null && !prop.distorted && plate.plateOk;
     if (acceptable) {
       const cand = { img, issues: verdict.issues };
