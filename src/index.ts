@@ -773,28 +773,33 @@ async function synthesizeAngle(
         continue;
       }
     }
-    let verdict = await compareAgainstSources(
-      { data: img }, refs, spec, cfg.GEMINI, CACHE_DIR, cli.useCache,
-    );
-    // aparte proportie-poort: in de brede inspectie verdronk deze vraag en
-    // kwam een samengedrukte Cross Turismo erdoorheen
-    const prop = await checkProportions(
-      { data: img }, refs, spec, cfg.GEMINI, CACHE_DIR, cli.useCache,
-    );
-    // plaat-poort: het model monteert de plaat zelf, dus er moet een aparte
-    // controle op zitten dat logo/tekst exact kloppen en de plaat niet
-    // uitgerekt of buitenmaats is
-    // Wordt de plaat achteraf overschreven, dan hoeft hij nu niet te
-    // kloppen: een mislukte modelplaat kost dan geen poging meer. We maken
-    // er straks eerst een blanco houder van en zetten het asset erin.
-    const plate = plateAsset && !cli.plateAfter
-      ? await checkPlate({ data: img }, plateAsset, cfg.GEMINI, CACHE_DIR, cli.useCache)
-      : { plateOk: true, issues: [] };
-    // kwaliteitspoort: het anker is de standaard — slechte bronfoto's zijn
-    // nooit een excuus voor een zachte of plastic-achtige render
-    const qual = hasAnchor
-      ? await checkQuality({ data: img }, genRefs[0]!, cfg.GEMINI, CACHE_DIR, cli.useCache)
-      : { qualityOk: true, issues: [] };
+    // De vier poorten hieronder weten niets van elkaar en draaien daarom
+    // tegelijk. Achter elkaar telden hun wachttijden op — gemeten kost één
+    // oordeel 4 tot 7 s (2026-08-04). Nu duurt het geheel zo lang als de
+    // traagste; de uitkomsten veranderen niet.
+    //
+    // - proporties: in de brede inspectie verdronk die vraag en kwam een
+    //   samengedrukte Cross Turismo erdoorheen
+    // - plaat: het model monteert de plaat zelf, dus er moet apart gecheckt
+    //   worden dat logo en tekst kloppen en de plaat niet uitgerekt is.
+    //   Wordt hij achteraf overschreven, dan hoeft hij nu niet te kloppen en
+    //   kost een mislukte modelplaat geen poging.
+    // - kwaliteit: slechte bronfoto's zijn nooit een excuus voor een zachte
+    //   of plastic-achtige render
+    let [verdict, prop, plate, qual] = await Promise.all([
+      compareAgainstSources(
+        { data: img }, refs, spec, cfg.GEMINI, CACHE_DIR, cli.useCache,
+      ),
+      checkProportions(
+        { data: img }, refs, spec, cfg.GEMINI, CACHE_DIR, cli.useCache,
+      ),
+      plateAsset && !cli.plateAfter
+        ? checkPlate({ data: img }, plateAsset, cfg.GEMINI, CACHE_DIR, cli.useCache)
+        : Promise.resolve({ plateOk: true, issues: [] as string[] }),
+      hasAnchor
+        ? checkQuality({ data: img }, genRefs[0]!, cfg.GEMINI, CACHE_DIR, cli.useCache)
+        : Promise.resolve({ qualityOk: true, issues: [] as string[] }),
+    ]);
     // Scherpte wordt gemeten, niet beoordeeld: de detaildichtheid van de
     // uitvoer tegen die van de bronfoto's van dezelfde auto.
     if (srcDetail !== null && srcDetail > 0) {
