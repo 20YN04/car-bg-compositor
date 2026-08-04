@@ -186,6 +186,9 @@ const server = http.createServer((req, res) => {
       return json(res, 403, { error: "forbidden" });
     }
     const url = new URL(req.url ?? "/", "http://localhost");
+    // De Carredo-app prefixt scraper-paden met /api/v1 — beide vormen
+    // accepteren houdt de wissel aan hun kant op één env-var.
+    url.pathname = url.pathname.replace(/^\/api\/v1(?=\/)/, "");
 
     if (req.method === "POST" && url.pathname === "/images/thumbnail/enqueue") {
       const body = (await leesBody(req)) as {
