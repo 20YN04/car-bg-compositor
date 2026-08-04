@@ -546,7 +546,12 @@ async function synthesizeAngle(
   dir: string,
   cfg: Config,
   cli: CliOptions,
-): Promise<{ img: Buffer; fillPct: number }> {
+): Promise<{
+  img: Buffer;
+  fillPct: number;
+  srcMedian: ChannelMeans | null;
+  tintReliable: boolean;
+}> {
   const entries = await readdir(path.join(IN_DIR, dir), { withFileTypes: true });
   const refFiles = entries
     .filter((e) => e.isFile() && /\.(jpe?g|png)$/i.test(e.name))
@@ -1049,7 +1054,7 @@ async function synthesizeAngle(
     path.join(CACHE_DIR, `accepted-synth-${dir.replace(/[/\\]/g, "_")}.jpg`),
     best.img,
   );
-  return { img: best.img, fillPct };
+  return { img: best.img, fillPct, srcMedian, tintReliable };
 }
 
 /**
@@ -1137,6 +1142,40 @@ async function main(): Promise<void> {
   // als handmatige --mount-plate voor beelden zonder plaat
   const synth = await synthesizeAngle(cli.synth, cfg, cli);
   let accepted = synth.img;
+
+  // Deterministische lak-afwerklaag: exact naar de bron-mediaan, hetzelfde
+  // doel als de rondganghoeken in car-multiview. De poortband (±15%) bewaakt
+  // per beeld; zonder dit convergeren thumbnail en rondgang van dezelfde
+  // auto niet — front34 en side scheelden onderling 13% luma bij gelijke
+  // tint (gemeten op de AMG, 2026-08-04). Puur pixelwerk, geen API.
+  if (synth.srcMedian) {
+    try {
+      const accPath0 = path.join(CACHE_DIR, "accepted-paint.jpg");
+      await writeFile(accPath0, accepted);
+      const gemeten = await paintMeansOf(accPath0, cfg, cli.useCache);
+      const lumaVan = (m: ChannelMeans): number => 0.2126 * m.r + 0.7152 * m.g + 0.0722 * m.b;
+      const ratio = lumaVan(gemeten) / lumaVan(synth.srcMedian);
+      if (Math.abs(ratio - 1) > 0.03) {
+        const gains = paintCorrectionGains(gemeten, synth.srcMedian, 1.45, !synth.tintReliable);
+        const cutout0 = await getCutout(accPath0, CACHE_DIR, cfg.FAL, cfg.MATTE, cli.useCache);
+        let plateBox: { x: number; y: number; w: number; h: number } | null = null;
+        try {
+          plateBox = await tightPlateBox(accepted, cfg.PLATE, CACHE_DIR, cli.useCache);
+        } catch {
+          // zonder box corrigeert de gain ook de plaat — geen blokkade
+        }
+        accepted = await applyMaskedGains(accepted, cutout0, gains, plateBox);
+        console.log(
+          `  lak-afwerklaag: luma x${ratio.toFixed(2)} → bron-mediaan ` +
+            `(gains ${gains.map((g) => g.toFixed(3)).join("/")})`,
+        );
+      }
+    } catch (err) {
+      console.warn(
+        `  ⚠ lak-afwerklaag mislukt (${err instanceof Error ? err.message : err}) — kandidaat ongewijzigd`,
+      );
+    }
+  }
 
   // geometrie in code: eerst de auto deterministisch op zijn reële
   // kadervulling en de vaste grondlijn zetten (alleen downscalen), daarna
