@@ -32,6 +32,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
+import { bouwSpec, type VehicleData } from "./spec.js";
 
 const PORT = Number(process.env["PORT"] ?? 8801);
 /** Optionele gedeelde sleutel; staat hij in .env, dan is hij verplicht. */
@@ -189,7 +190,7 @@ const server = http.createServer((req, res) => {
     if (req.method === "POST" && url.pathname === "/images/thumbnail/enqueue") {
       const body = (await leesBody(req)) as {
         car_id?: unknown; mode?: unknown; source_url?: unknown;
-        source_urls?: unknown; spec?: unknown;
+        source_urls?: unknown; spec?: unknown; vehicle?: unknown;
       };
       const carId = Number(body.car_id);
       if (!Number.isFinite(carId)) return json(res, 400, { error: "car_id ontbreekt" });
@@ -210,7 +211,13 @@ const server = http.createServer((req, res) => {
         result: null, error: null, log: [],
       };
       jobs.set(job.taskId, job);
-      const spec = typeof body.spec === "string" ? body.spec : null;
+      // spec-prioriteit: expliciete tekst wint; anders bouwt de template hem
+      // uit de databasevelden — Carredo hoeft geen prompt-taal te kennen
+      const spec = typeof body.spec === "string" && body.spec.trim().length > 0
+        ? body.spec
+        : body.vehicle && typeof body.vehicle === "object"
+          ? bouwSpec(body.vehicle as VehicleData)
+          : null;
       wachtrij.push(() => verwerk(job, [...new Set(urls)], spec));
       volgende();
       return json(res, 200, { task_id: job.taskId, state: job.state });

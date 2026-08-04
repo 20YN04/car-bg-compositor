@@ -75,3 +75,13 @@ opzet.
 2. Aanbevolen: `source_urls` met alle exterieurfoto's meesturen in plaats van
    alleen `images[0]`.
 3. `text_only`-auto's op de bestaande scraper-route laten.
+
+## Spec uit data (aanbevolen route)
+
+Naast `spec` (vrije tekst) accepteert de enqueue een `vehicle`-object met
+databasevelden (make/model/trim/year/body/colour/packages/wheels/badges/
+wheelbaseM/lengthM/notes); een vaste template (`src/spec.ts`) vertaalt dat
+server-side naar de spec. De template kan per constructie niets beweren
+zonder data — de les van de handgeschreven specs. `badges` is het veld waar
+menselijke bevestiging landt; de badge-census bewaakt die lijst limitatief.
+Expliciete `spec` wint wanneer beide aanwezig zijn.
