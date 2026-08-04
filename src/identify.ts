@@ -548,15 +548,27 @@ export async function checkBadgeCensus(
       return null;
     }
   };
+  // Meerderheid op BESTAAN van een overtreding, niet op tekstgelijkheid.
+  // De verdubbelde badge rendert vaak verhaspeld ("EGE" naast "EQE"); twee
+  // stemmen die hem allebei zien maar anders lezen, waren het onder de oude
+  // regel "oneens" en spraken samen vrij — zo kwam de dubbel er in poging 2
+  // alsnog door (2026-08-04). Nu: twee stemmen eens = blok, verdeeld = derde
+  // stem beslist, twee schone stemmen = door.
   const [a, b] = await Promise.all([ask(1), ask(2)]);
   if (a === null || b === null) return { badgesOk: true, issues: [] };
-  const inBeide = a.filter((x) =>
-    b.some((y) => y.text.toLowerCase().replace(/\s+/g, "") === x.text.toLowerCase().replace(/\s+/g, "")),
-  );
+  let stemmen = [a, b];
+  if ((a.length === 0) !== (b.length === 0)) {
+    const c = await ask(3);
+    if (c === null) return { badgesOk: true, issues: [] };
+    stemmen = [a, b, c];
+  }
+  const voor = stemmen.filter((v) => v.length > 0).length;
+  const blok = voor >= 2;
+  const alle = stemmen.flat();
   return {
-    badgesOk: inBeide.length === 0,
-    issues: inBeide.map(
-      (x) => `badge violates the description: "${x.text}" (${x.where})`,
-    ),
+    badgesOk: !blok,
+    issues: blok
+      ? [...new Set(alle.map((x) => `badge violates the description: "${x.text}" (${x.where})`))]
+      : [],
   };
 }
