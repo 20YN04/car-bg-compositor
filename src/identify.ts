@@ -530,7 +530,9 @@ export async function checkBadgeCensus(
     "sit. Step 2: list EVERY badge, emblem and model lettering instance " +
     "visible in the crops, with its panel (count an instance once even " +
     "when overlapping crops show it twice; ignore the licence/Carredo " +
-    "plate, brand star and grille emblems, and anything behind glass). " +
+    "plate, brand star and grille emblems, and anything behind glass; " +
+    "ignore EVERYTHING on wheels, tyres and brake calipers — factory " +
+    "caliper and rim lettering is judged by the wheel gate, not here). " +
     "Step 3: report every instance the description does not allow — wrong " +
     "text, wrong panel, or a SECOND instance on a nearby panel where the " +
     "description allows one (a stacked duplicate is a violation).\n" +
