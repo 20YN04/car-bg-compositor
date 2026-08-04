@@ -4,7 +4,18 @@ import { paintCorrectionGains, paintDeviation, parseVerdict } from "./identify.j
 describe("parseVerdict", () => {
   it("leest strikte JSON", () => {
     const v = parseVerdict('{"same_vehicle": true, "paint_match": true, "issues": []}');
-    expect(v).toEqual({ sameVehicle: true, paintMatch: true, issues: [] });
+    expect(v).toEqual({
+      sameVehicle: true, paintMatch: true, badgesMatch: true, issues: [],
+    });
+  });
+
+  it("een verzonnen badge blokkeert, ook bij same_vehicle true", () => {
+    const v = parseVerdict(
+      '{"same_vehicle": true, "paint_match": true, "badges_match": false, ' +
+        '"issues": ["4MATIC badge not on source"]}',
+    );
+    expect(v.sameVehicle).toBe(true);
+    expect(v.badgesMatch).toBe(false);
   });
 
   it("een expliciete lak-afkeuring komt door", () => {

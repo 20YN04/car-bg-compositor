@@ -51,6 +51,15 @@ export interface IdentityVerdict {
   sameVehicle: boolean;
   /** Aparte lakbeoordeling: tint, lichtheid en metallic-karakter. */
   paintMatch: boolean;
+  /**
+   * Badges apart én blokkerend. Als onderdeel van de issues-lijst telde een
+   * verzonnen badge als "kleine afwijking" en publiceerde de terugvalroute in
+   * car-multiview de AMG mét een 4MATIC-badge die de echte auto niet voert —
+   * nadat de poort hem meermaals correct had benoemd (2026-08-04). Een
+   * verzonnen, verdubbelde of ontbrekende badge is een verkeerde voorstelling
+   * van de auto, geen cosmetiek.
+   */
+  badgesMatch: boolean;
   issues: string[];
 }
 
@@ -101,8 +110,15 @@ export async function compareAgainstSources(
     "lightness and metallic character. A silver car that renders white or " +
     "cream, a grey that loses its blue cast, or any colour shift relative " +
     "to the sources is a paint mismatch even when the model is right.\n" +
+    "Report badges in the separate field `badges_match`: false when any " +
+    "badge or lettering is invented, duplicated, moved to another panel or " +
+    "missing relative to the source photos — matching the model name is no " +
+    "excuse. Dealer stickers advertising the selling dealer are " +
+    "intentionally absent from the candidate — never count their absence " +
+    "as a badge mismatch.\n" +
     'Answer with STRICT JSON only, no code fences: {"same_vehicle": ' +
-    'boolean, "paint_match": boolean, "issues": string[]} — issues stays ' +
+    'boolean, "paint_match": boolean, "badges_match": boolean, ' +
+    '"issues": string[]} — issues stays ' +
     "empty when everything matches.";
   // Twee stemmen, en bij onenigheid een derde. Eén oordeel is wisselvallig:
   // op de BMW i5 Touring keurde de inspectie twaalf keer op rij af als
@@ -129,11 +145,14 @@ export function parseVerdict(raw: string): IdentityVerdict {
     try {
       const obj = JSON.parse(match[0]) as {
         same_vehicle?: unknown;
+        badges_match?: unknown;
         paint_match?: unknown;
         issues?: unknown;
       };
       return {
         sameVehicle: obj.same_vehicle === true,
+        // ontbreekt het veld (ouder cache-antwoord), dan niet blokkeren
+        badgesMatch: obj.badges_match !== false,
         // ontbreekt het veld (ouder cache-antwoord), dan beslist de
         // deterministische lakmeting alleen — niet dubbel straffen
         paintMatch: obj.paint_match !== false,

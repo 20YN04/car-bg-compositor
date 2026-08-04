@@ -932,9 +932,12 @@ async function synthesizeAngle(
     // waarna de hoek helemaal niets opleverde. Een wat zachter beeld is beter
     // dan géén beeld, dus kwaliteit degradeert naar tweede keus. Overgenomen
     // uit car-multiview (2026-08-02).
+    // badgesMatch hard erin: een verzonnen of verdubbelde badge is nooit een
+    // kleine afwijking — via de terugvalroute belandde in car-multiview de
+    // AMG mét 4MATIC-badge in de uitvoer (2026-08-04)
     const acceptable =
-      verdict.sameVehicle && verdict.paintMatch && paintIssue === null &&
-      !prop.distorted && plate.plateOk;
+      verdict.sameVehicle && verdict.paintMatch && verdict.badgesMatch &&
+      paintIssue === null && !prop.distorted && plate.plateOk;
     if (acceptable) {
       const cand = { img, issues: verdict.issues };
       if (qual.qualityOk) {
