@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { mkdirSync } from "node:fs";
 import sharp from "sharp";
 import { writeFile, rm } from "node:fs/promises";
 import { replaceBackground } from "./background.js";
@@ -25,6 +26,8 @@ describe("replaceBackground", () => {
     ).png().toBuffer();
 
     // plate: uniform 200
+    // verse checkout heeft nog geen cache/ — de test hoort zichzelf te dragen
+    mkdirSync("cache", { recursive: true });
     const platePath = "cache/test-plate.png";
     await sharp({ create: { width: W, height: H, channels: 3, background: { r: 200, g: 200, b: 200 } } })
       .png().toFile(platePath);
