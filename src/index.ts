@@ -450,6 +450,14 @@ function synthPrompt(
     "modernise or invent anything, and KEEP THE REAL PROPORTIONS — " +
     "wheelbase, body length, height and wheel size exactly as in the " +
     "source photos, never stretched or compressed.\n" +
+    // Badges komen van de FOTO'S, nooit uit de modelnaam: in car-multiview
+    // plakte het model een 4MATIC-badge en een tweede EQE-badge op de AMG
+    // omdat de spec die naam noemde (2026-08-04).
+    "BADGES AND LETTERING: reproduce ONLY the badges that are visible in " +
+    "the source photos, each in its exact location — nothing more. NEVER " +
+    "add a badge or lettering because the model name or trim level implies " +
+    "it, and NEVER repeat a badge on additional panels: a badge the photos " +
+    "show once appears once.\n" +
     "ANGLE: three-quarter FRONT view with the front of the car on the " +
     "RIGHT of the frame, roughly 30-35 degrees off axis, camera height " +
     "1.0-1.3 m.\n" +

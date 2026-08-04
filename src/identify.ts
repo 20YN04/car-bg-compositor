@@ -87,7 +87,12 @@ export async function compareAgainstSources(
     "handles, antennas and sensors. Also check the PROPORTIONS: wheelbase " +
     "versus body length, roof height, overhangs and wheel size must match " +
     "the sources — a stretched, squashed or otherwise distorted body is a " +
-    "mismatch. List every detail that is missing, changed, invented or " +
+    "mismatch. BADGES: every badge or lettering visible on the candidate " +
+    "must also be visible on the source photos, on the SAME panel — a badge " +
+    "that appears only on the candidate, or a second copy of a badge the " +
+    "sources show once, is an invented detail and a mismatch, even when the " +
+    "badge text matches the model name. " +
+    "List every detail that is missing, changed, invented or " +
     "distorted in the candidate. Ignore background, framing and shadow. " +
     "The candidate intentionally carries a Carredo dealer plate instead of " +
     "the original licence plate — never report the plate as a difference; " +
