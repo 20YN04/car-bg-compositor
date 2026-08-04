@@ -166,7 +166,10 @@ export function parseVerdict(raw: string): IdentityVerdict {
   }
   // geen parsebare JSON: alleen een expliciete ja zonder twijfeltaal telt
   const yes = /"?same_vehicle"?\s*[:=]?\s*true|^\s*yes\b/i.test(raw);
-  return { sameVehicle: yes, paintMatch: yes, issues: yes ? [] : [raw.slice(0, 300)] };
+  return {
+    sameVehicle: yes, paintMatch: yes, badgesMatch: true,
+    issues: yes ? [] : [raw.slice(0, 300)],
+  };
 }
 
 export interface ProportionVerdict {
