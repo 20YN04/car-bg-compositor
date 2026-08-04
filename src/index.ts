@@ -889,10 +889,10 @@ async function synthesizeAngle(
       // inspectie en moet daar alsnog schoon doorheen (de IONIQ-case:
       // Transmission Blue dreef alleen in tint, en dat is precies wat de
       // curves rechtzetten).
-      if (
-        paintIssue && verdict.sameVehicle &&
-        verdict.issues.length === 0 && !prop.distorted
-      ) {
+      // Corrigeren zodra de auto klópt — cosmetische opmerkingen houden de
+      // deterministische correctie niet langer tegen (zie car-multiview,
+      // 2026-08-04: vijf pogingen verloren aan luma x0.62-0.81).
+      if (paintIssue && verdict.sameVehicle && !prop.distorted) {
         const gains = paintCorrectionGains(cand, srcMedian, 1.45, !tintReliable);
         // de plaat uit de correctie houden: zonder exclusie kreeg de witte
         // Carredo-plaat de donker-gains van de koets mee. Strak op
