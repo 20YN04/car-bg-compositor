@@ -182,7 +182,10 @@ async function leesBody(req: http.IncomingMessage): Promise<unknown> {
 
 const server = http.createServer((req, res) => {
   void (async () => {
-    if (SERVICE_KEY && req.headers["x-internal-key"] !== SERVICE_KEY) {
+    // De Carredo-app stuurt X-API-Key (SCRAPER_API_KEY); eigen aanroepen
+    // gebruiken X-Internal-Key. Beide gelden — zelfde sleutel, andere naam.
+    const sleutel = req.headers["x-internal-key"] ?? req.headers["x-api-key"];
+    if (SERVICE_KEY && sleutel !== SERVICE_KEY) {
       return json(res, 403, { error: "forbidden" });
     }
     const url = new URL(req.url ?? "/", "http://localhost");

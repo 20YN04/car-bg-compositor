@@ -85,3 +85,38 @@ server-side naar de spec. De template kan per constructie niets beweren
 zonder data — de les van de handgeschreven specs. `badges` is het veld waar
 menselijke bevestiging landt; de badge-census bewaakt die lijst limitatief.
 Expliciete `spec` wint wanneer beide aanwezig zijn.
+
+## Deploy
+
+Beide services zijn gedockeriseerd (zie `Dockerfile`; poort 8801 thumbnail,
+8802 walkaround). Fragment voor Carredo's `docker-compose.production.yml`:
+
+```yaml
+  thumbnail-service:
+    build: ../car-bg-compositor        # of een gepushte image
+    restart: unless-stopped
+    environment:
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      FAL_KEY: ${FAL_KEY}
+      WEBAPP_URL: http://web:3000
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY}
+      SERVICE_API_KEY: ${SCRAPER_API_KEY}   # zelfde sleutel als de app al stuurt
+    volumes:
+      - thumbnail-data:/app/in
+      - thumbnail-out:/app/out
+      - thumbnail-cache:/app/cache
+
+  walkaround-service:
+    build: ../car-multiview
+    restart: unless-stopped
+    environment: *zelfde als hierboven*
+    volumes:
+      - walkaround-data:/app/in
+      - walkaround-out:/app/out
+      - walkaround-cache:/app/cache
+```
+
+De app wijst je aan met `THUMBNAIL_API_URL=http://thumbnail-service:8801`
+(de services accepteren Carredo's `/api/v1`-prefix én de `X-API-Key`-header
+via `SERVICE_API_KEY`). Niet gezet = bestaand gedrag, dus de uitrol kan per
+omgeving.
