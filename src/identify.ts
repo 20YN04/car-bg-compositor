@@ -90,6 +90,10 @@ export async function compareAgainstSources(
     `source photo of the real vehicle (${korteSpec}).\n` +
     "The source photos are the ONLY truth. Judge the candidate against what " +
     "you see in them, never against expectations from the model name.\n" +
+    "Judge ONLY what the candidate's viewing angle could show: a badge or " +
+    "detail on a panel that is not visible from this angle (a bonnet star " +
+    "on a pure side profile, a boot badge from the front) is NEVER " +
+    "'missing' — different angles show different panels.\n" +
     "Compare the candidate against the sources like a vehicle inspector. " +
     "Check the exact model and generation, paint colour, wheel design, " +
     "badges, head- and taillights, grille, trim, roof line, mirrors, door " +
