@@ -19,6 +19,7 @@ import {
 } from "./identify.js";
 import { getCutout, maskStats, noteFalFailure } from "./mask.js";
 import { cutoutMeans, detailStrength, medianMeans, type ChannelMeans } from "./measure.js";
+import { onthoud } from "./metingen.js";
 import { carBox, measureFill, normalizeScale, replaceBackground } from "./background.js";
 import { checkGeometry, wheelbaseRatio } from "./geometry.js";
 import { florenceBoxes, mountPlate, tightPlateBox } from "./plate.js";
@@ -633,10 +634,17 @@ async function synthesizeAngle(
   // opname. Faalt de matte op álle bronfoto's, dan is er niets om tegen te
   // meten en blijft alleen de VLM-inspectie over — met een melding, zodat
   // een stille terugval niet voor een strengere poort wordt aangezien.
+  // Begrensd tot 8 exterieurs en via het meetdossier: de mediaan wordt niet
+  // beter van 20 foto's, en het dossier (METINGEN_DIR, deelbaar met de
+  // rondgang-service) meet elke foto systeembreed maar één keer.
   const srcMeans: ChannelMeans[] = [];
-  for (const f of refFiles) {
+  for (const f of refFiles.slice(0, 8)) {
     try {
-      srcMeans.push(await paintMeansOf(path.join(IN_DIR, f), cfg, cli.useCache));
+      const bytes = await readFile(path.join(IN_DIR, f));
+      const m = await onthoud(bytes, "paint", () =>
+        paintMeansOf(path.join(IN_DIR, f), cfg, cli.useCache),
+      );
+      if (m) srcMeans.push(m);
     } catch (err) {
       noteFalFailure(err);
     }
@@ -667,7 +675,10 @@ async function synthesizeAngle(
   // van de uitvoer, want het is dezelfde auto in dezelfde kleur. Het anker is
   // dat niet, en dat is precies waar de oude kwaliteitspoort op strandde.
   const srcDetails: number[] = [];
-  for (const r of refs) srcDetails.push(await detailStrength(r.data));
+  for (const r of refs.slice(0, 8)) {
+    const d = await onthoud(r.data, "detail", () => detailStrength(r.data));
+    if (d !== undefined) srcDetails.push(d);
+  }
   srcDetails.sort((a, b) => a - b);
   const srcDetail = srcDetails.length > 0
     ? srcDetails[Math.floor((srcDetails.length - 1) / 2)]!
@@ -702,10 +713,12 @@ async function synthesizeAngle(
   // wielbasis/wieldiameter-verhouding. Zonder betrouwbaar zijaanzicht
   // (ratio < 3.3) vervalt de geometriepoort, met melding.
   let sideRatio: number | null = null;
-  for (const r of refs) {
+  for (const r of refs.slice(0, 8)) {
     try {
-      const wr = await wheelbaseRatio(r.data, cfg.PLATE.detectionModelId, CACHE_DIR, cli.useCache);
-      if (wr !== null && (sideRatio === null || wr > sideRatio)) sideRatio = wr;
+      const wr = await onthoud(r.data, "wheelRatio", () =>
+        wheelbaseRatio(r.data, cfg.PLATE.detectionModelId, CACHE_DIR, cli.useCache),
+      );
+      if (wr !== null && wr !== undefined && (sideRatio === null || wr > sideRatio)) sideRatio = wr;
     } catch (err) {
       noteFalFailure(err);
     }
