@@ -20,6 +20,7 @@ import {
 import { getCutout, maskStats, noteFalFailure } from "./mask.js";
 import { cutoutMeans, detailStrength, medianMeans, type ChannelMeans } from "./measure.js";
 import { onthoud } from "./metingen.js";
+import { classifyPhoto } from "./classify.js";
 import { carBox, measureFill, normalizeScale, replaceBackground } from "./background.js";
 import { checkGeometry, wheelbaseRatio } from "./geometry.js";
 import { florenceBoxes, mountPlate, tightPlateBox } from "./plate.js";
@@ -562,12 +563,40 @@ async function synthesizeAngle(
   tintReliable: boolean;
 }> {
   const entries = await readdir(path.join(IN_DIR, dir), { withFileTypes: true });
-  const refFiles = entries
+  const alleFiles = entries
     .filter((e) => e.isFile() && /\.(jpe?g|png)$/i.test(e.name))
     .map((e) => path.join(dir, e.name))
     .sort();
-  if (refFiles.length === 0) {
+  if (alleFiles.length === 0) {
     throw new Error(`geen bronfoto's gevonden in ${IN_DIR}/${dir}/`);
+  }
+  // Sorteren zoals de rondgang dat doet: alleen exterieurfoto's mogen de
+  // generatie en de metingen in. Zonder deze stap vergiftigden zes
+  // hash-willekeurige bronfoto's (vooral interieurs) de lak-mediaan van een
+  // witte Tesla: de kandidaat werd afgekeurd op 'x1.98 te licht' terwijl hij
+  // klopte — de mediaan was donker cabinegemiddelde (E2E-dev, 2026-08-05).
+  // Carredo stuurt de volledige galerij mét interieurs, dus dit is de
+  // productiewerkelijkheid, geen randgeval. Classificatie loopt via het
+  // meetdossier: systeembreed één keer per foto.
+  const refFiles: string[] = [];
+  let interieurGeteld = 0;
+  for (const f of alleFiles) {
+    const bytes = await readFile(path.join(IN_DIR, f));
+    const klasse = await onthoud(bytes, "classify", async () => {
+      const k = await classifyPhoto({ data: bytes }, cfg.GEMINI, CACHE_DIR, cli.useCache);
+      return { kind: k.kind, closeUp: k.closeUp, redacted: k.redacted, redactedWhere: k.redactedWhere };
+    });
+    if (klasse?.kind === "exterior") refFiles.push(f);
+    else if (klasse?.kind === "interior") interieurGeteld++;
+  }
+  if (alleFiles.length > refFiles.length) {
+    console.log(
+      `  sortering: ${refFiles.length} exterieur · ${interieurGeteld} interieur ` +
+        `(niet gebruikt voor de thumbnail) · ${alleFiles.length - refFiles.length - interieurGeteld} overig`,
+    );
+  }
+  if (refFiles.length === 0) {
+    throw new Error(`geen exterieurfoto's gevonden in ${IN_DIR}/${dir}/ — een thumbnail zonder buitenkant bestaat niet`);
   }
   const refs: ImagePart[] = [];
   for (const f of refFiles) {
