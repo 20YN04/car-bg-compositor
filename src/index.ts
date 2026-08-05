@@ -696,6 +696,17 @@ async function synthesizeAngle(
 
   const bodyRef = await bodyCloseUp(refFiles, cfg, cli.useCache);
   if (bodyRef) genRefs = [...genRefs, bodyRef];
+  // Kruisreferenties met de walkaround-service (REFERENTIES_DIR, in compose
+  // een gedeeld volume): al goedgekeurde rondganghoeken van dezelfde auto
+  // trekken de thumbnail naar dezelfde velgen, lak en uitvoering. Best
+  // effort — ontbreekt de map, dan verandert er niets.
+  const refDir = path.join(process.env["REFERENTIES_DIR"] ?? "./referenties", dir);
+  if (existsSync(refDir)) {
+    for (const f of (await readdir(refDir)).filter((x) => /^\d\d-.*\.jpg$/i.test(x)).sort()) {
+      genRefs = [...genRefs, { data: await readFile(path.join(refDir, f)) }];
+      console.log(`  rondganghoek van de zusterservice geladen als referentie: ${f}`);
+    }
+  }
   const wheelRef = await wheelCloseUp(refs, cfg, cli.useCache);
   if (!wheelRef) {
     console.log("  ⚠ geen bruikbaar wiel in de bronfoto's — geen velgreferentie");
@@ -1263,6 +1274,13 @@ async function main(): Promise<void> {
     if (entry.isFile()) await rm(path.join(outDir, entry.name), { force: true });
   }
   await writeFile(thumbPath, accepted);
+  try {
+    const refDirUit = path.join(process.env["REFERENTIES_DIR"] ?? "./referenties", cli.synth!);
+    await mkdir(refDirUit, { recursive: true });
+    await writeFile(path.join(refDirUit, "thumbnail.jpg"), accepted);
+  } catch {
+    // referentiemap is best effort
+  }
   console.log(`\nthumbnail: ${thumbPath} — enige beeld in ${outDir}/`);
   console.log(
     `Gemini: ${geminiStats.calls} calls, ${geminiStats.cacheHits} cache-hits · ` +
