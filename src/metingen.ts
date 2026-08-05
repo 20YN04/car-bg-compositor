@@ -34,6 +34,10 @@ export interface FotoMeting {
   detail?: number;
   /** wielbasis/wieldiameter-verhouding, null = niet meetbaar op deze foto */
   wheelRatio?: number | null;
+  /** Florence-boxen voor "wheel" — de dure helft van de velgreferentie */
+  wheelBoxes?: { x: number; y: number; w: number; h: number }[];
+  /** koets-boundingbox uit de matte — de dure helft van de koetsreferentie */
+  carBox?: { left: number; top: number; width: number; height: number } | null;
 }
 
 // lui gelezen: tests en services kunnen de map per proces kiezen zonder

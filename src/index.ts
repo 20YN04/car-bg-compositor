@@ -298,10 +298,14 @@ async function bodyCloseUp(
   for (const f of refFiles) {
     try {
       const file = path.join(IN_DIR, f);
-      const cutout = await getCutout(file, CACHE_DIR, cfg.FAL, cfg.MATTE, useCache);
-      const box = await carBox(cutout);
-      if (!box) continue;
       const src = await readFile(file);
+      // matte + boundingbox zijn de dure helft; via het dossier één keer
+      // per foto, over beide services heen
+      const box = await onthoud(src, "carBox", async () => {
+        const cutout = await getCutout(file, CACHE_DIR, cfg.FAL, cfg.MATTE, useCache);
+        return carBox(cutout);
+      });
+      if (!box) continue;
       const meta = await sharp(src).metadata();
       const w = meta.width ?? 0, h = meta.height ?? 0;
       if (!w || !h || box.width < w * 0.25) continue;
@@ -359,9 +363,13 @@ async function wheelCloseUp(
   let best: { part: ImagePart; score: number; note: string } | null = null;
   for (const [i, ref] of refs.entries()) {
     try {
-      const boxes = await florenceBoxes(
-        ref.data, "wheel", "wheelref", cfg.PLATE.detectionModelId, CACHE_DIR, useCache,
-      );
+      // de Florence-call is de dure helft; via het dossier betaalt het
+      // systeem hem per foto maar één keer, over beide services heen
+      const boxes = (await onthoud(ref.data, "wheelBoxes", () =>
+        florenceBoxes(
+          ref.data, "wheel", "wheelref", cfg.PLATE.detectionModelId, CACHE_DIR, useCache,
+        ),
+      )) ?? [];
       const meta0 = await sharp(ref.data).metadata();
       const iw = meta0.width ?? 0, ih = meta0.height ?? 0;
       for (const box of boxes) {
