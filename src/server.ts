@@ -34,6 +34,8 @@ import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { bouwSpec, type VehicleData } from "./spec.js";
+import { defaultConfig } from "./config.js";
+import { mountPlate } from "./plate.js";
 
 const PORT = Number(process.env["PORT"] ?? 8801);
 /** Optionele gedeelde sleutel; staat hij in .env, dan is hij verplicht. */
@@ -91,6 +93,57 @@ async function bewaarJob(rec: JobRecord): Promise<void> {
 }
 
 const jobs = new Map<string, Job>();
+
+/**
+ * Plaatmontage als batchtaak: dezelfde deterministische Carredo-plaat als in
+ * de AI-renders (Florence vindt de houder, SAM2 het vlak, de plaat-PNG wordt
+ * gewarpt), maar dan over aangeleverde beelden — bedoeld voor de
+ * spin360-frames, zodat de draaibare viewer exact dezelfde plaat toont als
+ * thumbnail en rondgang (Yentl, 2026-08-05). Frames zonder detecteerbare
+ * plaat (zuivere zijaanzichten) gaan onaangeroerd terug, met reden.
+ * Bewust zonder crash-resume: een spin is in minuten opnieuw te posten
+ * vanuit de framesmap; de zware taken hebben die zorg wél.
+ */
+interface PlaatBeeld {
+  name: string;
+  bytes_b64: string;
+  mounted?: boolean;
+  reason?: string;
+}
+interface PlaatJob {
+  taskId: string;
+  state: Job["state"];
+  images: PlaatBeeld[] | null;
+  error: string | null;
+}
+const plaatJobs = new Map<string, PlaatJob>();
+
+async function verwerkPlaat(job: PlaatJob, beelden: PlaatBeeld[]): Promise<void> {
+  job.state = "STARTED";
+  try {
+    const uit: PlaatBeeld[] = [];
+    for (const b of beelden) {
+      try {
+        const res = await mountPlate(
+          Buffer.from(b.bytes_b64, "base64"), defaultConfig.PLATE, "./cache", true,
+        );
+        uit.push(res.mounted
+          ? { name: b.name, bytes_b64: res.image.toString("base64"), mounted: true }
+          : { name: b.name, bytes_b64: b.bytes_b64, mounted: false, reason: res.reason });
+      } catch (err) {
+        uit.push({
+          name: b.name, bytes_b64: b.bytes_b64, mounted: false,
+          reason: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    job.images = uit;
+    job.state = "SUCCESS";
+  } catch (err) {
+    job.error = err instanceof Error ? err.message : String(err);
+    job.state = "FAILURE";
+  }
+}
 const wachtrij: Array<() => Promise<void>> = [];
 let bezig = false;
 
@@ -279,6 +332,34 @@ const server = http.createServer((req, res) => {
         state: job.state,
         ready: job.state === "SUCCESS" || job.state === "FAILURE",
         result: job.state === "SUCCESS" ? job.result : null,
+        error: job.state === "FAILURE" ? job.error : null,
+      });
+    }
+
+    if (req.method === "POST" && url.pathname === "/images/plate/enqueue") {
+      const body = (await leesBody(req)) as { images?: unknown };
+      const beelden = (Array.isArray(body.images) ? body.images : [])
+        .filter((b): b is { name?: unknown; bytes_b64?: unknown } => typeof b === "object" && b !== null)
+        .map((b) => ({ name: String(b.name ?? "frame"), bytes_b64: String(b.bytes_b64 ?? "") }))
+        .filter((b) => b.bytes_b64.length > 0);
+      if (beelden.length === 0) return json(res, 400, { error: "images ontbreken" });
+      if (beelden.length > 80) return json(res, 400, { error: "max 80 beelden per taak" });
+      const job: PlaatJob = { taskId: randomUUID(), state: "PENDING", images: null, error: null };
+      plaatJobs.set(job.taskId, job);
+      wachtrij.push(() => verwerkPlaat(job, beelden));
+      volgende();
+      return json(res, 200, { task_id: job.taskId, state: job.state });
+    }
+
+    const plaatPoll = url.pathname.match(/^\/images\/plate\/([0-9a-f-]{36})$/);
+    if (req.method === "GET" && plaatPoll) {
+      const job = plaatJobs.get(plaatPoll[1]!);
+      if (!job) return json(res, 404, { error: "onbekende taak" });
+      return json(res, 200, {
+        task_id: job.taskId,
+        state: job.state,
+        ready: job.state === "SUCCESS" || job.state === "FAILURE",
+        result: job.state === "SUCCESS" ? { images: job.images } : null,
         error: job.state === "FAILURE" ? job.error : null,
       });
     }
