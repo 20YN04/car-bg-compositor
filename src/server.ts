@@ -61,6 +61,35 @@ interface Job {
   log: string[];
 }
 
+/**
+ * Taken overleven een herstart. De takenlijst stond alleen in het geheugen:
+ * stierf de container halverwege, dan was de taak weg en pollde de app een
+ * task_id die niemand meer kende — terwijl de pipeline-cache het werk juist
+ * bijna gratis kan afmaken (gemeten: een identieke herrun deed 0 calls en
+ * 135 cache-hits). Elke taak staat daarom op schijf (zonder de zware
+ * beeldbytes — die staan al in out/), en bij het opstarten wordt alles wat
+ * open stond opnieuw in de wachtrij gezet (Yentl, 2026-08-05).
+ */
+const JOBS_DIR = process.env["JOBS_DIR"] ?? "./jobs";
+
+interface JobRecord {
+  taskId: string;
+  carId: number;
+  state: Job["state"];
+  urls: string[];
+  spec: string | null;
+  error: string | null;
+}
+
+async function bewaarJob(rec: JobRecord): Promise<void> {
+  try {
+    await mkdir(JOBS_DIR, { recursive: true });
+    await writeFile(path.join(JOBS_DIR, `${rec.taskId}.json`), JSON.stringify(rec));
+  } catch {
+    // persistentie mag een taak nooit breken
+  }
+}
+
 const jobs = new Map<string, Job>();
 const wachtrij: Array<() => Promise<void>> = [];
 let bezig = false;
@@ -131,6 +160,9 @@ async function stuurWebhook(result: ThumbnailJobResult): Promise<void> {
 
 async function verwerk(job: Job, urls: string[], spec: string | null): Promise<void> {
   job.state = "STARTED";
+  await bewaarJob({
+    taskId: job.taskId, carId: job.carId, state: job.state, urls, spec, error: null,
+  });
   const mapNaam = `car-${job.carId}`;
   const inDir = path.resolve(import.meta.dirname, "..", "in", mapNaam);
   const outFile = path.resolve(import.meta.dirname, "..", "out", mapNaam, "thumbnail.jpg");
@@ -166,6 +198,10 @@ async function verwerk(job: Job, urls: string[], spec: string | null): Promise<v
     };
     job.state = "FAILURE";
   }
+  await bewaarJob({
+    taskId: job.taskId, carId: job.carId, state: job.state, urls, spec,
+    error: job.error,
+  });
   await stuurWebhook(job.result);
 }
 
@@ -225,6 +261,10 @@ const server = http.createServer((req, res) => {
         : body.vehicle && typeof body.vehicle === "object"
           ? bouwSpec(body.vehicle as VehicleData)
           : null;
+      void bewaarJob({
+        taskId: job.taskId, carId: job.carId, state: job.state,
+        urls: [...new Set(urls)], spec, error: null,
+      });
       wachtrij.push(() => verwerk(job, [...new Set(urls)], spec));
       volgende();
       return json(res, 200, { task_id: job.taskId, state: job.state });
@@ -251,6 +291,32 @@ const server = http.createServer((req, res) => {
     json(res, 500, { error: err instanceof Error ? err.message : String(err) });
   });
 });
+
+async function hervatOpenTaken(): Promise<void> {
+  if (!existsSync(JOBS_DIR)) return;
+  let hervat = 0;
+  for (const f of (await readdir(JOBS_DIR)).filter((x) => x.endsWith(".json"))) {
+    try {
+      const rec = JSON.parse(await readFile(path.join(JOBS_DIR, f), "utf8")) as JobRecord;
+      if (rec.state === "SUCCESS" || rec.state === "FAILURE") continue;
+      const job: Job = {
+        taskId: rec.taskId, carId: rec.carId, state: "PENDING",
+        result: null, error: null, log: [],
+      };
+      jobs.set(job.taskId, job);
+      wachtrij.push(() => verwerk(job, rec.urls, rec.spec));
+      hervat++;
+    } catch {
+      // een kapot record slaan we over; de app kan opnieuw enqueuen
+    }
+  }
+  if (hervat > 0) {
+    console.log(`${hervat} open ta(a)k(en) hervat na herstart — de pipeline-cache maakt dit goedkoop`);
+    volgende();
+  }
+}
+
+void hervatOpenTaken();
 
 server.listen(PORT, () => {
   console.log(
