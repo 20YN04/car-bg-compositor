@@ -3,12 +3,16 @@ import { afterAll, describe, expect, it } from "vitest";
 import { fotoHash, onthoud } from "./metingen.js";
 
 describe("meetdossier", () => {
-  afterAll(() => rmSync("./metingen-test", { recursive: true, force: true }));
+  // unieke map per testrun: de eerste versie schreef naar de echte
+  // ./metingen (DIR werd bij import gelezen, vóór de test de env zette) en
+  // de tweede run las die persistente waarden — expect(metingen).toBe(1)
+  // faalde toen pas. Staat leek tussen runs is precies wat dit dossier
+  // dóét; de test moet er dus zelf buiten blijven.
+  const testDir = `./metingen-test-${process.pid}`;
+  process.env["METINGEN_DIR"] = testDir;
+  afterAll(() => rmSync(testDir, { recursive: true, force: true }));
 
   it("meet één keer en onthoudt daarna", async () => {
-    process.env["METINGEN_DIR"] = "./metingen-test";
-    // module leest DIR bij import — test via een verse import zou netter
-    // zijn, maar de standaardmap volstaat: we testen het gedrag, niet de env
     const bytes = Buffer.from("dezelfde-foto-bytes");
     let metingen = 0;
     const a = await onthoud(bytes, "detail", async () => { metingen++; return 42; });

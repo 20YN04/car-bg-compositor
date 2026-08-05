@@ -36,14 +36,18 @@ export interface FotoMeting {
   wheelRatio?: number | null;
 }
 
-const DIR = process.env["METINGEN_DIR"] ?? "./metingen";
+// lui gelezen: tests en services kunnen de map per proces kiezen zonder
+// dat de import-volgorde bepaalt welke waarde blijft hangen
+function DIR(): string {
+  return process.env["METINGEN_DIR"] ?? "./metingen";
+}
 
 export function fotoHash(bytes: Buffer): string {
   return createHash("sha256").update(bytes).digest("hex").slice(0, 24);
 }
 
 async function lees(hash: string): Promise<FotoMeting> {
-  const p = path.join(DIR, `${hash}.json`);
+  const p = path.join(DIR(), `${hash}.json`);
   if (!existsSync(p)) return {};
   try {
     return JSON.parse(await readFile(p, "utf8")) as FotoMeting;
@@ -54,8 +58,8 @@ async function lees(hash: string): Promise<FotoMeting> {
 
 async function schrijf(hash: string, m: FotoMeting): Promise<void> {
   try {
-    await mkdir(DIR, { recursive: true });
-    await writeFile(path.join(DIR, `${hash}.json`), JSON.stringify(m));
+    await mkdir(DIR(), { recursive: true });
+    await writeFile(path.join(DIR(), `${hash}.json`), JSON.stringify(m));
   } catch {
     // niet kunnen schrijven mag een run nooit breken
   }
