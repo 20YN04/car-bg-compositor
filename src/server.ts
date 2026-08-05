@@ -36,6 +36,7 @@ import path from "node:path";
 import { bouwSpec, type VehicleData } from "./spec.js";
 import { defaultConfig } from "./config.js";
 import { mountPlate } from "./plate.js";
+import { geminiText } from "./gemini.js";
 
 const PORT = Number(process.env["PORT"] ?? 8801);
 /** Optionele gedeelde sleutel; staat hij in .env, dan is hij verplicht. */
@@ -334,6 +335,50 @@ const server = http.createServer((req, res) => {
         result: job.state === "SUCCESS" ? job.result : null,
         error: job.state === "FAILURE" ? job.error : null,
       });
+    }
+
+    // Spec-dubbelcheck voor de acquisitie-stap: één tekstoordeel dat de
+    // ingevoerde voertuigdata naast de foto's legt en concrete mismatches
+    // teruggeeft ("listing zegt grijs, foto's tonen blauw"). Synchronoon —
+    // één Gemini-call plus wat downloads, bedoeld voor een knop in de modal.
+    // Vangt scraperfouten vóór ze een auto in gaan: een spec die de foto's
+    // tegenspreekt is de duurste faalwijze van de hele pipeline.
+    if (req.method === "POST" && url.pathname === "/images/spec-check") {
+      const body = (await leesBody(req)) as { source_urls?: unknown; vehicle?: unknown };
+      const urls = (Array.isArray(body.source_urls) ? body.source_urls : [])
+        .filter((u): u is string => typeof u === "string" && u.length > 0)
+        .slice(0, 6);
+      if (urls.length === 0 || !body.vehicle || typeof body.vehicle !== "object") {
+        return json(res, 400, { error: "source_urls en vehicle zijn verplicht" });
+      }
+      const fotos: { data: Buffer }[] = [];
+      for (const u of urls) {
+        try {
+          const r = await fetch(u, { signal: AbortSignal.timeout(15_000) });
+          if (r.ok) fotos.push({ data: Buffer.from(await r.arrayBuffer()) });
+        } catch { /* onbereikbare foto telt niet mee */ }
+      }
+      if (fotos.length === 0) return json(res, 400, { error: "geen van de foto's was downloadbaar" });
+      try {
+        const prompt =
+          "These photos show one car offered for sale. The listing data " +
+          `claims:\n${JSON.stringify(body.vehicle, null, 2)}\n` +
+          "List every CONCRETE mismatch between that data and what the " +
+          "photos actually show — colour, body type, apparent model or " +
+          "generation, door count, obvious trim details. Judge only what " +
+          "the photos can prove; lighting shifts and unreadable details " +
+          "are not mismatches. Answer with STRICT JSON only, no code " +
+          'fences: {"warnings": string[]} — empty when data and photos agree.';
+        const raw = await geminiText(fotos, prompt, defaultConfig.GEMINI, "./cache", true);
+        const m = raw.match(/\{[\s\S]*\}/);
+        const obj = m ? (JSON.parse(m[0]) as { warnings?: unknown }) : {};
+        return json(res, 200, {
+          warnings: Array.isArray(obj.warnings) ? obj.warnings.map(String) : [],
+          photos_checked: fotos.length,
+        });
+      } catch (err) {
+        return json(res, 502, { error: err instanceof Error ? err.message : String(err) });
+      }
     }
 
     if (req.method === "POST" && url.pathname === "/images/plate/enqueue") {
