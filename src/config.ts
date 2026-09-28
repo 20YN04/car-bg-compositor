@@ -9,6 +9,8 @@
  * proporties) bewaakt het resultaat.
  */
 
+import path from "node:path";
+
 export interface GeminiConfig {
   /**
    * Model voor de poortoordelen. Het dagquotum van Gemini geldt per model,
@@ -178,7 +180,10 @@ export const defaultConfig: Config = {
     maxLumaRatio: 1.15,
     maxTintDelta: 0.05,
     anchorPath: "assets/thumbnail-composition-anchor.jpg",
-    backgroundPlatePath: "assets/studio-empty.jpg",
+    // absoluut, ten opzichte van deze module: een relatief pad hing af van
+    // de cwd van het proces, en een ontbrekende plate publiceerde de
+    // achtergrond van het model (Yentl, 2026-09-28)
+    backgroundPlatePath: path.resolve(import.meta.dirname, "..", "assets", "studio-empty.jpg"),
     groundLineRatio: 0.813,
   },
   PLATE: {
