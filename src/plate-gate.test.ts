@@ -88,7 +88,8 @@ describe("normaliseToPlate", () => {
   it("levert de auto gecentreerd op de plate, en dat beeld haalt de poort", async () => {
     const platePath = await testPlate("test-norm-plate.png");
     // te groot en uit het midden, zoals het model hem tekent
-    const k = await kandidaat({ r: 150, g: 150, b: 150 }, { x: 10, y: 100, w: 540, h: 230 });
+    // backdrop lighter than the plate: a darker one is the floor-bleed case below
+    const k = await kandidaat({ r: 240, g: 240, b: 245 }, { x: 10, y: 100, w: 540, h: 230 });
     const res = await normaliseToPlate(k.img, k.cutout, 0.8, 0.813, platePath);
     expect(await plateDeviation(res.img, platePath)).toBeNull();
     expect(res.measuredFill).toBeGreaterThan(0.85);
@@ -109,5 +110,46 @@ describe("normaliseToPlate", () => {
     await expect(
       normaliseToPlate(k.img, k.cutout, 0.8, 0.813, "/bestaat/niet/studio-empty.jpg"),
     ).rejects.toThrow(/plate/);
+  });
+});
+
+describe("normaliseToPlate — shadow zone", () => {
+  const auto = { x: 150, y: 150, w: 300, h: 170 };
+  const rect = (fill: string) =>
+    Buffer.from(`<svg width="${W}" height="${H}"><rect x="${auto.x}" y="${auto.y}" width="${auto.w}" height="${auto.h}" fill="${fill}"/></svg>`);
+
+  it("rejects a model floor darker than the plate instead of passing it off as shadow", async () => {
+    const platePath = await testPlate("test-norm-floor.png");
+    // the model's own floor, 20% darker than the plate, from 0.62 down: the
+    // shadow transfer used to carry it into the plate as a hard-edged box
+    const floorTop = Math.round(H * 0.62);
+    const floor = await sharp(platePath)
+      .linear(0.8, 0)
+      .extract({ left: 0, top: floorTop, width: W, height: H - floorTop })
+      .toBuffer();
+    const img = await sharp(platePath)
+      .composite([{ input: floor, left: 0, top: floorTop }, { input: rect("rgb(40,40,45)"), left: 0, top: 0 }])
+      .jpeg({ quality: 96 }).toBuffer();
+    const cutout = await sharp(rect("black")).png().toBuffer();
+    await expect(normaliseToPlate(img, cutout, 0.8, 0.813, platePath)).rejects.toThrow(/shadow zone/);
+    await rm(platePath, { force: true });
+  });
+
+  it("keeps a real contact shadow under the car", async () => {
+    const platePath = await testPlate("test-norm-shadow.png");
+    const shadow = Buffer.from(
+      `<svg width="${W}" height="${H}"><ellipse cx="300" cy="322" rx="140" ry="12" fill="rgb(60,60,65)"/></svg>`,
+    );
+    const img = await sharp(platePath)
+      .composite([{ input: shadow, left: 0, top: 0 }, { input: rect("rgb(40,40,45)"), left: 0, top: 0 }])
+      .jpeg({ quality: 96 }).toBuffer();
+    const cutout = await sharp(rect("black")).png().toBuffer();
+    const res = await normaliseToPlate(img, cutout, 0.8, 0.813, platePath);
+    // the shadow came through: the pixel just under the car is darker than the plate there
+    const { data } = await sharp(res.img).raw().toBuffer({ resolveWithObject: true });
+    const plate = await sharp(platePath).removeAlpha().raw().toBuffer();
+    const p = (Math.round(H * 0.813) + 3) * W * 3 + 300 * 3;
+    expect(plate[p]! - data[p]!).toBeGreaterThan(20);
+    await rm(platePath, { force: true });
   });
 });

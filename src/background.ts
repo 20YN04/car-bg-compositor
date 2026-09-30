@@ -376,6 +376,63 @@ export async function plateDeviation(img: Buffer, platePath: string): Promise<st
 }
 
 /**
+ * Side margins of the shadow zone (2-6% of the width beside the car), in 8-bit
+ * levels. `replaceBackground` multiplies any candidate darkening in that zone
+ * into the plate, so a model floor darker than the plate came through as a
+ * hard-edged box while every `plateDeviation` zone matched. Measured
+ * 2026-09-30, 2528x1696, normalisation (fill 0.88) re-run on 19 cached renders
+ * with cached cutouts: 18 at <= 2.9 (Audi e-tron), VW-ID3 (darker floor) 33.5-34.7.
+ */
+const SHADOW_MARGIN_MAX_MEAN_DELTA = 8;
+
+/** Per side of the car, the non-car pixels in the shadow-zone margin must match the plate. */
+export async function shadowZoneDeviation(
+  img: Buffer,
+  cutout: Buffer,
+  platePath: string,
+): Promise<string | null> {
+  const { data, info } = await sharp(img)
+    .removeAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  const W = info.width;
+  const H = info.height;
+  const plate = await sharp(platePath)
+    .resize(W, H, { fit: "fill" })
+    .removeAlpha()
+    .raw()
+    .toBuffer();
+  const { alpha, box, zone } = await shadowGeometry(cutout, W, H);
+  if (!box) return "shadow zone: empty mask";
+  const gap = Math.round(W * 0.02);
+  const sides: Array<[string, number, number]> = [
+    ["left", zone.x0, box.left - gap],
+    ["right", box.right + gap, zone.x1],
+  ];
+  const deviations: string[] = [];
+  for (const [side, x0, x1] of sides) {
+    const sum = [0, 0, 0];
+    let n = 0;
+    for (let y = zone.y0; y <= zone.y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        const i = y * W + x;
+        if ((alpha[i] ?? 0) > 0) continue;
+        for (let c = 0; c < 3; c++) sum[c]! += (data[i * 3 + c] ?? 0) - (plate[i * 3 + c] ?? 0);
+        n++;
+      }
+    }
+    if (n === 0) continue;
+    const delta = Math.max(...sum.map((v) => Math.abs(v) / n));
+    if (delta > SHADOW_MARGIN_MAX_MEAN_DELTA) {
+      deviations.push(`${side} margin Δ ${delta.toFixed(1)}`);
+    }
+  }
+  return deviations.length > 0
+    ? `shadow zone differs from the studio plate beside the car (${deviations.join("; ")}): the model's floor came through`
+    : null;
+}
+
+/**
  * Schaal, grondlijn en achtergrond in één stap, met de plate-poort erachter.
  * Contract: het resultaat staat op de plate, of de functie gooit. Er is geen
  * pad waarlangs de ongewijzigde kandidaat terugkomt — dat is precies het
@@ -391,7 +448,9 @@ export async function normaliseToPlate(
   await assertPlate(platePath);
   const scaled = await normalizeScale(img, cutout, targetFill, groundLineRatio);
   const uit = await replaceBackground(scaled.img, scaled.cutout, platePath);
-  const afwijking = await plateDeviation(uit, platePath);
+  const afwijking =
+    (await plateDeviation(uit, platePath)) ??
+    (await shadowZoneDeviation(uit, scaled.cutout, platePath));
   if (afwijking) throw new Error(afwijking);
   return { img: uit, measuredFill: scaled.measuredFill };
 }
