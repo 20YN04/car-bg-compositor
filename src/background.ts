@@ -113,6 +113,51 @@ export async function normalizeScale(
   return { img: imgCanvas, cutout: cutCanvas, measuredFill };
 }
 
+interface ShadowGeometry {
+  /** Car alpha at image size, lightly blurred. */
+  alpha: Buffer;
+  /** Inclusive car bbox from `alpha`, or null for an empty mask. */
+  box: { left: number; right: number; top: number; bottom: number } | null;
+  /** Inclusive shadow-transfer zone around the bottom of the car. */
+  zone: { x0: number; x1: number; y0: number; y1: number };
+}
+
+/** Car alpha, bbox and shadow-transfer zone: one geometry for the transfer and its check. */
+async function shadowGeometry(cutout: Buffer, width: number, height: number): Promise<ShadowGeometry> {
+  const alpha = await sharp(cutout)
+    .resize(width, height, { fit: "fill" })
+    .ensureAlpha()
+    .extractChannel(3)
+    .blur(1)
+    .raw()
+    .toBuffer();
+  let left = width, right = -1, top = height, bottom = -1;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      if ((alpha[y * width + x] ?? 0) > 10) {
+        if (x < left) left = x;
+        if (x > right) right = x;
+        if (y < top) top = y;
+        if (y > bottom) bottom = y;
+      }
+    }
+  }
+  if (right < 0) return { alpha, box: null, zone: { x0: 0, x1: -1, y0: 0, y1: -1 } };
+  const mx = Math.round(width * 0.06);
+  const myDown = Math.round(height * 0.1);
+  return {
+    alpha,
+    box: { left, right, top, bottom },
+    zone: {
+      x0: Math.max(0, left - mx),
+      x1: Math.min(width - 1, right + mx),
+      // contact zone only: just under the body and just under the tyres
+      y0: Math.max(0, bottom - Math.round((bottom - top) * 0.25)),
+      y1: Math.min(height - 1, bottom + myDown),
+    },
+  };
+}
+
 /**
  * Vervangt de achtergrond van een geaccepteerde kandidaat door de statische
  * studio-plate — deterministisch, per pixel.
@@ -146,38 +191,10 @@ export async function replaceBackground(
     .removeAlpha()
     .raw()
     .toBuffer();
-  const alpha = await sharp(cutout)
-    .resize(width, height, { fit: "fill" })
-    .ensureAlpha()
-    .extractChannel(3)
-    .blur(1)
-    .raw()
-    .toBuffer();
-
-  // bbox van de auto voor de schaduwzone
-  let left = width, right = -1, top = height, bottom = -1;
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      if ((alpha[y * width + x] ?? 0) > 10) {
-        if (x < left) left = x;
-        if (x > right) right = x;
-        if (y < top) top = y;
-        if (y > bottom) bottom = y;
-      }
-    }
-  }
-  if (right < 0) {
+  const { alpha, box, zone } = await shadowGeometry(cutout, width, height);
+  if (!box) {
     throw new Error("achtergrondvervanging: leeg masker — kandidaat ongewijzigd laten");
   }
-  const mx = Math.round(width * 0.06);
-  const myDown = Math.round(height * 0.1);
-  const zone = {
-    x0: Math.max(0, left - mx),
-    x1: Math.min(width - 1, right + mx),
-    // alleen de contactzone: vlak onder de koets en net onder de banden
-    y0: Math.max(0, bottom - Math.round((bottom - top) * 0.25)),
-    y1: Math.min(height - 1, bottom + myDown),
-  };
   const featherPx = Math.round(width * 0.02);
   const zoneWeight = (x: number, y: number): number => {
     if (x < zone.x0 || x > zone.x1 || y < zone.y0 || y > zone.y1) return 0;
