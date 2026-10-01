@@ -21,7 +21,13 @@ import { getCutout, maskStats, noteFalFailure } from "./mask.js";
 import { cutoutMeans, detailStrength, medianMeans, type ChannelMeans } from "./measure.js";
 import { onthoud } from "./metingen.js";
 import { classifyPhoto } from "./classify.js";
-import { carBox, measureFill, normalizeScale, replaceBackground } from "./background.js";
+import {
+  assertPlate,
+  carBox,
+  measureFill,
+  normaliseToPlate,
+  plateDeviation,
+} from "./background.js";
 import { checkGeometry, wheelbaseRatio } from "./geometry.js";
 import { florenceBoxes, mountPlate, tightPlateBox } from "./plate.js";
 
@@ -1197,6 +1203,9 @@ async function main(): Promise<void> {
     return;
   }
 
+  // zonder plate kan er niets gepubliceerd worden: faal vóór de eerste
+  // betaalde call, niet na zes pogingen
+  await assertPlate(cfg.SYNTH.backgroundPlatePath);
   console.log(`→ ${cli.synth}`);
   // de plaat zit sinds 2026-07-30 ín de generatie (asset als referentie +
   // eigen poort); de deterministische naderhand-montage bestaat alleen nog
@@ -1241,34 +1250,32 @@ async function main(): Promise<void> {
   // geometrie in code: eerst de auto deterministisch op zijn reële
   // kadervulling en de vaste grondlijn zetten (alleen downscalen), daarna
   // de achtergrond vervangen door de statische plate. Faalt een stap, dan
-  // publiceren we niet half — de kandidaat gaat er ongewijzigd door, met
-  // melding.
-  if (existsSync(cfg.SYNTH.backgroundPlatePath)) {
+  // publiceren we níet: vroeger ging de kandidaat hier ongewijzigd door, met
+  // de achtergrond van het model en zonder schaalnormalisatie. "Een andere
+  // achtergrond zou niet mogen" (Yentl, 2026-09-28) — de taak faalt.
+  {
+    const accPath = path.join(CACHE_DIR, "accepted-tmp.jpg");
+    await writeFile(accPath, accepted);
     try {
-      const accPath = path.join(CACHE_DIR, "accepted-tmp.jpg");
-      await writeFile(accPath, accepted);
       const cutout = await getCutout(accPath, CACHE_DIR, cfg.FAL, cfg.MATTE, cli.useCache);
-      const scaled = await normalizeScale(
+      const norm = await normaliseToPlate(
         accepted, cutout, synth.fillPct, cfg.SYNTH.groundLineRatio,
+        cfg.SYNTH.backgroundPlatePath,
       );
-      if (scaled.measuredFill - synth.fillPct > 0.02) {
+      if (norm.measuredFill - synth.fillPct > 0.02) {
         console.log(
-          `  schaal genormaliseerd: ${Math.round(scaled.measuredFill * 100)}% → ${Math.round(synth.fillPct * 100)}% kadervulling`,
+          `  schaal genormaliseerd: ${Math.round(norm.measuredFill * 100)}% → ${Math.round(synth.fillPct * 100)}% kadervulling`,
         );
       }
-      accepted = await replaceBackground(
-        scaled.img, scaled.cutout, cfg.SYNTH.backgroundPlatePath,
-      );
-      await rm(accPath, { force: true });
+      accepted = norm.img;
     } catch (err) {
-      console.warn(
-        `  ⚠ schaal/achtergrond-normalisatie mislukt (${err instanceof Error ? err.message : err}) — kandidaat ongewijzigd gepubliceerd`,
+      throw new Error(
+        `schaal/achtergrond-normalisatie mislukt (${err instanceof Error ? err.message : err}) ` +
+          "— er wordt niets gepubliceerd",
       );
+    } finally {
+      await rm(accPath, { force: true });
     }
-  } else {
-    console.warn(
-      `  ⚠ studio-plate ontbreekt (${cfg.SYNTH.backgroundPlatePath}) — achtergrond blijft uit het model komen`,
-    );
   }
 
   // De plaat deterministisch overschrijven. Het model tekent hem zelf, want
@@ -1306,6 +1313,12 @@ async function main(): Promise<void> {
   // het goedgekeurde studiobeeld ÍS het eindresultaat (besluit 2026-07-30):
   // geen hercompositing, plaathouder blijft zoals gegenereerd. Publiceren =
   // wegschrijven, en out/<map>/ houdt exact één bestand over.
+  // harde laatste poort: wat hier wordt weggeschreven, staat op de plate —
+  // gemeten op de uiteindelijke bytes, ná de plaatmontage
+  const afwijking = await plateDeviation(accepted, cfg.SYNTH.backgroundPlatePath);
+  if (afwijking) {
+    throw new Error(`${afwijking} — er wordt niets gepubliceerd`);
+  }
   await mkdir(outDir, { recursive: true });
   for (const entry of await readdir(outDir, { withFileTypes: true })) {
     if (entry.isFile()) await rm(path.join(outDir, entry.name), { force: true });

@@ -36,6 +36,7 @@ import path from "node:path";
 import { bouwSpec, type VehicleData } from "./spec.js";
 import { defaultConfig } from "./config.js";
 import { mountPlate } from "./plate.js";
+import { assertPlate, plateDeviation } from "./background.js";
 import { geminiText } from "./gemini.js";
 
 const PORT = Number(process.env["PORT"] ?? 8801);
@@ -232,6 +233,11 @@ async function verwerk(job: Job, urls: string[], spec: string | null): Promise<v
       throw new Error(`pipeline eindigde met code ${code} zonder thumbnail — ${staart}`);
     }
     const bytes = await readFile(outFile);
+    // dezelfde plate-poort als in de pipeline, op de bytes die de deur
+    // uitgaan: ook een thumbnail die al in out/ stond (de pipeline laat die
+    // ongemoeid) wordt nooit verstuurd met een andere achtergrond
+    const afwijking = await plateDeviation(bytes, defaultConfig.SYNTH.backgroundPlatePath);
+    if (afwijking) throw new Error(`${afwijking} — niet verstuurd`);
     job.result = {
       car_id: job.carId,
       status: "ok",
@@ -440,6 +446,15 @@ async function hervatOpenTaken(): Promise<void> {
     console.log(`${hervat} open ta(a)k(en) hervat na herstart — de pipeline-cache maakt dit goedkoop`);
     volgende();
   }
+}
+
+// Zonder leesbare studio-plate kan geen enkele taak slagen: niet opstarten,
+// in plaats van taken te aanvaarden die pas na minuten generatie falen.
+try {
+  await assertPlate(defaultConfig.SYNTH.backgroundPlatePath);
+} catch (err) {
+  console.error(`thumbnail-service start niet: ${err instanceof Error ? err.message : err}`);
+  process.exit(1);
 }
 
 void hervatOpenTaken();

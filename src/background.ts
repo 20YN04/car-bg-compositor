@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import sharp from "sharp";
 
 export interface CarBox {
@@ -112,6 +113,51 @@ export async function normalizeScale(
   return { img: imgCanvas, cutout: cutCanvas, measuredFill };
 }
 
+interface ShadowGeometry {
+  /** Car alpha at image size, lightly blurred. */
+  alpha: Buffer;
+  /** Inclusive car bbox from `alpha`, or null for an empty mask. */
+  box: { left: number; right: number; top: number; bottom: number } | null;
+  /** Inclusive shadow-transfer zone around the bottom of the car. */
+  zone: { x0: number; x1: number; y0: number; y1: number };
+}
+
+/** Car alpha, bbox and shadow-transfer zone: one geometry for the transfer and its check. */
+async function shadowGeometry(cutout: Buffer, width: number, height: number): Promise<ShadowGeometry> {
+  const alpha = await sharp(cutout)
+    .resize(width, height, { fit: "fill" })
+    .ensureAlpha()
+    .extractChannel(3)
+    .blur(1)
+    .raw()
+    .toBuffer();
+  let left = width, right = -1, top = height, bottom = -1;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      if ((alpha[y * width + x] ?? 0) > 10) {
+        if (x < left) left = x;
+        if (x > right) right = x;
+        if (y < top) top = y;
+        if (y > bottom) bottom = y;
+      }
+    }
+  }
+  if (right < 0) return { alpha, box: null, zone: { x0: 0, x1: -1, y0: 0, y1: -1 } };
+  const mx = Math.round(width * 0.06);
+  const myDown = Math.round(height * 0.1);
+  return {
+    alpha,
+    box: { left, right, top, bottom },
+    zone: {
+      x0: Math.max(0, left - mx),
+      x1: Math.min(width - 1, right + mx),
+      // contact zone only: just under the body and just under the tyres
+      y0: Math.max(0, bottom - Math.round((bottom - top) * 0.25)),
+      y1: Math.min(height - 1, bottom + myDown),
+    },
+  };
+}
+
 /**
  * Vervangt de achtergrond van een geaccepteerde kandidaat door de statische
  * studio-plate — deterministisch, per pixel.
@@ -145,38 +191,10 @@ export async function replaceBackground(
     .removeAlpha()
     .raw()
     .toBuffer();
-  const alpha = await sharp(cutout)
-    .resize(width, height, { fit: "fill" })
-    .ensureAlpha()
-    .extractChannel(3)
-    .blur(1)
-    .raw()
-    .toBuffer();
-
-  // bbox van de auto voor de schaduwzone
-  let left = width, right = -1, top = height, bottom = -1;
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      if ((alpha[y * width + x] ?? 0) > 10) {
-        if (x < left) left = x;
-        if (x > right) right = x;
-        if (y < top) top = y;
-        if (y > bottom) bottom = y;
-      }
-    }
-  }
-  if (right < 0) {
+  const { alpha, box, zone } = await shadowGeometry(cutout, width, height);
+  if (!box) {
     throw new Error("achtergrondvervanging: leeg masker — kandidaat ongewijzigd laten");
   }
-  const mx = Math.round(width * 0.06);
-  const myDown = Math.round(height * 0.1);
-  const zone = {
-    x0: Math.max(0, left - mx),
-    x1: Math.min(width - 1, right + mx),
-    // alleen de contactzone: vlak onder de koets en net onder de banden
-    y0: Math.max(0, bottom - Math.round((bottom - top) * 0.25)),
-    y1: Math.min(height - 1, bottom + myDown),
-  };
   const featherPx = Math.round(width * 0.02);
   const zoneWeight = (x: number, y: number): number => {
     if (x < zone.x0 || x > zone.x1 || y < zone.y0 || y > zone.y1) return 0;
@@ -255,4 +273,184 @@ export async function replaceBackground(
   return sharp(out, { raw: { width, height, channels: 3 } })
     .jpeg({ quality: 96 })
     .toBuffer();
+}
+
+/**
+ * Faalt luid als de studio-plate ontbreekt of niet te decoderen is. Zonder
+ * plate kan er geen thumbnail gepubliceerd worden: vroeger ging de kandidaat
+ * dan met de achtergrond van het model door (Yentl, 2026-09-28: "een andere
+ * achtergrond zou niet mogen").
+ */
+export async function assertPlate(platePath: string): Promise<void> {
+  if (!existsSync(platePath)) {
+    throw new Error(`studio-plate ontbreekt: ${platePath}`);
+  }
+  try {
+    const meta = await sharp(platePath).metadata();
+    if (!meta.width || !meta.height) throw new Error("geen afmetingen");
+    await sharp(platePath).resize(8, 8).raw().toBuffer();
+  } catch (err) {
+    throw new Error(
+      `studio-plate onleesbaar (${platePath}): ${err instanceof Error ? err.message : err}`,
+    );
+  }
+}
+
+/**
+ * Meetzones van de achtergrond, als fractie van het beeld: de hoeken en
+ * randen waar per constructie nooit auto of schaduw staat. De auto vult
+ * maximaal 88% van de breedte, gecentreerd (6% marge links en rechts), met
+ * zijn onderkant op de grondlijn 0.813 en de schaduwzone tot ~0.91. Bewust
+ * niet `backgroundMeans` uit index.ts: die meet randen van 7.8% breed tot
+ * halverwege het beeld, en daar staat bij een bestelwagen al koets.
+ */
+const PLATE_ZONES: Record<string, [number, number, number, number]> = {
+  "linksboven": [0, 0, 0.08, 0.08],
+  "rechtsboven": [0.92, 0, 1, 0.08],
+  "midden-boven": [0.35, 0, 0.65, 0.08],
+  "onderrand": [0.35, 0.95, 0.65, 1],
+  "linkerrand": [0, 0.08, 0.03, 0.45],
+  "rechterrand": [0.97, 0.08, 1, 0.45],
+};
+/**
+ * Toleranties van de plate-poort, in 8-bit niveaus. Gemeten 2026-09-28 op
+ * 2528×1696: de 11 goedgekeurde thumbnails in out/ en 3 productiebeelden
+ * wijken per zone ≤ 0.1 af in gemiddelde en ≤ 0.7 in pixelresidu
+ * (JPEG-ruis). Dezelfde beelden tegen de andere versie van de plate (blauw
+ * x0.945) wijken 9.6 af in gemiddelde en 3.8 in residu; de 17
+ * modeldecors in cache/accepted-synth-* 38–63 en 28–56. De grens ligt ruim
+ * boven de ruis en ruim onder elke echte afwijking.
+ */
+const PLATE_MAX_MEAN_DELTA = 2.5;
+const PLATE_MAX_RESIDU = 2.0;
+
+/**
+ * Laatste poort vóór publicatie: ligt de achtergrond van het beeld exact op
+ * de studio-plate? Per zone het gemiddelde per kanaal én het gemiddelde
+ * absolute pixelverschil — een gemiddelde alleen laat een egaal
+ * model-decor door dat toevallig even licht is; het residu vangt verloop,
+ * vignet en vloernaden. Geeft `null` bij akkoord, anders de reden.
+ */
+export async function plateDeviation(img: Buffer, platePath: string): Promise<string | null> {
+  const { data: beeld, info } = await sharp(img)
+    .removeAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  const W = info.width;
+  const H = info.height;
+  const plate = await sharp(platePath)
+    .resize(W, H, { fit: "fill" })
+    .removeAlpha()
+    .raw()
+    .toBuffer();
+  const afwijkingen: string[] = [];
+  for (const [naam, [fx0, fy0, fx1, fy1]] of Object.entries(PLATE_ZONES)) {
+    const x0 = Math.floor(W * fx0), x1 = Math.max(x0 + 1, Math.floor(W * fx1));
+    const y0 = Math.floor(H * fy0), y1 = Math.max(y0 + 1, Math.floor(H * fy1));
+    const somB = [0, 0, 0], somP = [0, 0, 0];
+    let residu = 0, n = 0;
+    for (let y = y0; y < y1; y++) {
+      for (let x = x0; x < x1; x++) {
+        const p = (y * W + x) * 3;
+        for (let c = 0; c < 3; c++) {
+          const b = beeld[p + c] ?? 0, q = plate[p + c] ?? 0;
+          somB[c]! += b;
+          somP[c]! += q;
+          residu += Math.abs(b - q);
+        }
+        n++;
+      }
+    }
+    const delta = Math.max(...[0, 1, 2].map((c) => Math.abs(somB[c]! - somP[c]!) / n));
+    const res = residu / (n * 3);
+    if (delta > PLATE_MAX_MEAN_DELTA || res > PLATE_MAX_RESIDU) {
+      const gem = (s: number[]) => s.map((v) => Math.round(v / n)).join(",");
+      afwijkingen.push(
+        `${naam} ${gem(somB)} tegen plate ${gem(somP)} (Δ ${delta.toFixed(1)}, residu ${res.toFixed(1)})`,
+      );
+    }
+  }
+  return afwijkingen.length > 0
+    ? `achtergrond wijkt af van de studio-plate: ${afwijkingen.join("; ")}`
+    : null;
+}
+
+/**
+ * Side margins of the shadow zone (2-6% of the width beside the car), in 8-bit
+ * levels. `replaceBackground` multiplies any candidate darkening in that zone
+ * into the plate, so a model floor darker than the plate came through as a
+ * hard-edged box while every `plateDeviation` zone matched. Measured
+ * 2026-09-30, 2528x1696, normalisation (fill 0.88) re-run on 19 cached renders
+ * with cached cutouts: 18 at <= 2.9 (Audi e-tron), VW-ID3 (darker floor) 33.5-34.7.
+ */
+const SHADOW_MARGIN_MAX_MEAN_DELTA = 8;
+
+/** Per side of the car, the non-car pixels in the shadow-zone margin must match the plate. */
+export async function shadowZoneDeviation(
+  img: Buffer,
+  cutout: Buffer,
+  platePath: string,
+): Promise<string | null> {
+  const { data, info } = await sharp(img)
+    .removeAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  const W = info.width;
+  const H = info.height;
+  const plate = await sharp(platePath)
+    .resize(W, H, { fit: "fill" })
+    .removeAlpha()
+    .raw()
+    .toBuffer();
+  const { alpha, box, zone } = await shadowGeometry(cutout, W, H);
+  if (!box) return "shadow zone: empty mask";
+  const gap = Math.round(W * 0.02);
+  const sides: Array<[string, number, number]> = [
+    ["left", zone.x0, box.left - gap],
+    ["right", box.right + gap, zone.x1],
+  ];
+  const deviations: string[] = [];
+  for (const [side, x0, x1] of sides) {
+    const sum = [0, 0, 0];
+    let n = 0;
+    for (let y = zone.y0; y <= zone.y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        const i = y * W + x;
+        if ((alpha[i] ?? 0) > 0) continue;
+        for (let c = 0; c < 3; c++) sum[c]! += (data[i * 3 + c] ?? 0) - (plate[i * 3 + c] ?? 0);
+        n++;
+      }
+    }
+    if (n === 0) continue;
+    const delta = Math.max(...sum.map((v) => Math.abs(v) / n));
+    if (delta > SHADOW_MARGIN_MAX_MEAN_DELTA) {
+      deviations.push(`${side} margin Δ ${delta.toFixed(1)}`);
+    }
+  }
+  return deviations.length > 0
+    ? `shadow zone differs from the studio plate beside the car (${deviations.join("; ")}): the model's floor came through`
+    : null;
+}
+
+/**
+ * Schaal, grondlijn en achtergrond in één stap, met de plate-poort erachter.
+ * Contract: het resultaat staat op de plate, of de functie gooit. Er is geen
+ * pad waarlangs de ongewijzigde kandidaat terugkomt — dat is precies het
+ * pad dat vroeger publiceerde met de achtergrond van het model.
+ */
+export async function normaliseToPlate(
+  img: Buffer,
+  cutout: Buffer,
+  targetFill: number,
+  groundLineRatio: number,
+  platePath: string,
+): Promise<{ img: Buffer; measuredFill: number }> {
+  await assertPlate(platePath);
+  const scaled = await normalizeScale(img, cutout, targetFill, groundLineRatio);
+  const uit = await replaceBackground(scaled.img, scaled.cutout, platePath);
+  const afwijking =
+    (await plateDeviation(uit, platePath)) ??
+    (await shadowZoneDeviation(uit, scaled.cutout, platePath));
+  if (afwijking) throw new Error(afwijking);
+  return { img: uit, measuredFill: scaled.measuredFill };
 }
